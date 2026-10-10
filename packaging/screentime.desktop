@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Time
+GenericName=Usage statistics
+Comment=See how much time you spend in apps and on websites
+Exec=@BINDIR@/screentime open
+Icon=screentime
+Terminal=false
+Categories=Utility;System;Monitor;
+Keywords=screen;time;usage;apps;websites;pickups;notifications;

@@ -43,7 +43,12 @@ export default class ScreentimeExtension extends Extension {
         if (!win)
             return ['', ''];
         const app = this._tracker.get_window_app(win);
-        return [app?.get_id() ?? win.get_wm_class() ?? '', win.get_title() ?? ''];
+        // Windows with no matching .desktop file get synthetic "window:N" ids; report
+        // their WM class instead so they stay stable across restarts.
+        const id = app && !app.is_window_backed()
+            ? app.get_id()
+            : `wm:${win.get_wm_class() ?? 'unknown'}`;
+        return [id, win.get_title() ?? ''];
     }
 
     _emit() {

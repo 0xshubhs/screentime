@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Screen Time for Linux",
+  "version": "0.1.0",
+  "description": "Tells the local screentimed daemon which site the active tab is on (domain only), so time per website can be shown.",
+  "permissions": ["tabs", "alarms"],
+  "host_permissions": ["http://127.0.0.1:47821/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"]
+  },
+  "browser_specific_settings": {
+    "gecko": { "id": "screentime@0xshubhs", "strict_min_version": "121.0" }
+  },
+  "icons": { "128": "icon.png" }
+}

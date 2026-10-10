@@ -40,7 +40,7 @@ Idle and lock come from public D-Bus APIs that need no extension:
  | screentime@0xshubhs     |       | WebExtension (MV3)        |
  | focus-window -> D-Bus   |       | active tab domain, audible|
  +-----------+-------------+       +-------------+-------------+
-             | session D-Bus signal              | native messaging (stdio)
+             | session D-Bus signal              | HTTP POST to 127.0.0.1
              v                                   v
         +------------------------------------------------+
         | screentimed (Rust, systemd --user service)     |
@@ -48,12 +48,12 @@ Idle and lock come from public D-Bus APIs that need no extension:
         |  - closes/opens usage intervals                |
         |  - categorises (rules.toml)                    |
         |  - writes SQLite (~/.local/share/screentime)   |
-        |  - exposes query API on D-Bus                  |
+        |  - serves the dashboard + JSON API (loopback)  |
         +------------------------+-----------------------+
                                  |
              +-------------------+--------------------+
              v                                        v
-   screentime CLI (today, week, top)       Screentime app (GTK4 + libadwaita)
+   screentime CLI + top bar tray           Dashboard (TypeScript, in the browser)
 ```
 
 ### Crates / components
@@ -62,10 +62,10 @@ Idle and lock come from public D-Bus APIs that need no extension:
 | --- | --- |
 | `crates/screentime-core` | Data model, SQLite schema + queries, categorisation rules, aggregation (daily totals, averages, top N) |
 | `crates/screentimed` | Daemon: D-Bus listeners, interval state machine, writer, query service |
-| `crates/screentime-cli` | `screentime today`, `screentime week`, `screentime top --by app|site|category` |
-| `crates/screentime-app` (phase 3) | GTK4 / libadwaita UI |
+| `crates/screentime-cli` | `screentime today`, `week`, `open`, and the top bar tray (`screentime tray`) |
+| `ui/` | TypeScript dashboard (Vite), embedded into the daemon at build time |
 | `gnome-extension/` | Focus tracker for GNOME Shell 45+ |
-| `browser-extension/` (phase 2) | Active tab reporter + native messaging host manifest |
+| `browser-extension/` | Active tab reporter (POSTs the domain to the daemon on localhost) |
 | `data/rules.toml` | Default app/domain to category mapping, user overridable |
 
 ## 4. Data model
@@ -74,10 +74,11 @@ Idle and lock come from public D-Bus APIs that need no extension:
 -- one row per continuous span of focused use
 usage(id, start_ms, end_ms, kind TEXT CHECK(kind IN ('app','web')),
       app_id TEXT,          -- desktop file id, e.g. code.desktop
-      domain TEXT,          -- for kind = 'web'
-      title TEXT,           -- optional, can be disabled for privacy
-      category TEXT)
-pickups(ts_ms)              -- every unlock
+      domain TEXT)          -- for kind = 'web'; category is computed from rules at read time
+pickups(ts_ms, kind, first_app)   -- every login and unlock, and the first app used after
+notifications(ts_ms, app_id)
+net_app(slot_ms, app_id, rx, tx)  -- 15 minute slots
+net_iface(slot_ms, iface, kind, rx, tx)
 ```
 
 Rules:
@@ -86,7 +87,8 @@ Rules:
   domain, so the UI can show "Apps" and "Websites" tabs like Screen Time without double
   counting the total (totals are computed from `app` rows only).
 - Media exception: if the focused tab is audible (video), idle does not stop the clock.
-- Category is resolved at write time but recomputed on rules change.
+- Category is computed from the rules when reports are built, so editing rules re-categorises
+  history immediately.
 
 ## 5. Categories (defaults, Screen Time style)
 
@@ -107,15 +109,16 @@ Users override in `~/.config/screentime/rules.toml`.
 
 ## 7. Phases
 
-1. **Core tracking (MVP).** GNOME extension, daemon, SQLite, rules, CLI `today` / `week`.
-   Done when: a day of real use produces correct per-app totals (spot checked against a stopwatch).
-2. **Websites.** Chrome + Firefox extension, native messaging host, domain rows, audible flag.
-3. **App.** GTK4 / libadwaita UI mirroring Screen Time (Today / Week toggle, charts, lists,
-   category pills, editable categories).
-4. **Limits and downtime.** Per app/category daily limits with notifications, scheduled downtime,
+1. **Core tracking, dashboard and tray (done, 2026-10-10).** GNOME extension, daemon, SQLite,
+   rules, pickups (logins and unlocks with first app used), notification counts per app, network
+   data per interface and per app, TypeScript dashboard embedded in the daemon, top bar tray,
+   CLI, browser extension, install script with autostart, Docker Compose for the dashboard.
+2. **Accuracy.** Validate a few days of real use against a stopwatch; eBPF-based per-app network
+   accounting (optional privileged helper) to cover UDP/QUIC; per-site notification attribution.
+3. **Limits and downtime.** Per app/category daily limits with notifications, scheduled downtime,
    weekly report notification.
-5. **Portability.** wlroots and X11 backends, KDE (KWin script), packaging (.deb, Flatpak for
-   the app, extension on extensions.gnome.org), export to CSV/JSON.
+4. **Portability.** wlroots and X11 focus backends, KDE (KWin script), packaging (.deb, the
+   extension on extensions.gnome.org, the browser extension on the stores), CSV/JSON export.
 
 ## 8. Privacy
 

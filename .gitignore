@@ -1,2 +1,21 @@
+# Rust
 /target
+
+# Dashboard
+ui/node_modules/
+ui/dist/
+*.tsbuildinfo
+
+# Local data (never commit usage history)
+*.db
+*.db-shm
+*.db-wal
+
+# Environment and editor files
+.env
+.env.*
 *.swp
+*~
+.DS_Store
+.idea/
+.vscode/

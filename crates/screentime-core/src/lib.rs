@@ -1,5 +1,9 @@
 //! Shared data model and categorisation rules for screentime.
 
+pub mod apps;
+pub mod db;
+pub mod report;
+
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -31,6 +35,25 @@ impl Rules {
     /// The default rules shipped in `data/rules.toml`.
     pub fn builtin() -> Self {
         Self::parse(BUILTIN_RULES).expect("built-in rules.toml is valid")
+    }
+
+    /// Built-in rules with `~/.config/screentime/rules.toml` layered on top.
+    pub fn load() -> Self {
+        let mut rules = Self::builtin();
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| db::home().join(".config"));
+        let path = base.join("screentime/rules.toml");
+        match std::fs::read_to_string(&path).map(|s| Self::parse(&s)) {
+            Ok(Ok(user)) => {
+                rules.apps.extend(user.apps);
+                rules.domains.extend(user.domains);
+                rules.globs.extend(user.globs);
+            }
+            Ok(Err(e)) => eprintln!("{}: {e}", path.display()),
+            Err(_) => {}
+        }
+        rules
     }
 
     /// Category for a desktop app id: exact match first, then globs.

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Screen Time tray
+Comment=Today's screen time in the top bar
+Exec=@BINDIR@/screentime tray
+Icon=screentime
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3

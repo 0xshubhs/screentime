@@ -9,4 +9,11 @@ name = "screentime"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+ksni = "0.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 screentime-core = { path = "../screentime-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "macros", "time"] }

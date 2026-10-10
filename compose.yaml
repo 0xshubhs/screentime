@@ -1,0 +1,23 @@
+# Dashboard in a container, reading the database written by the native tracker.
+#   docker compose up -d --build   ->  http://localhost:47822
+services:
+  dashboard:
+    build: .
+    image: screentime-dashboard
+    # Same uid as the desktop user so the SQLite files (and WAL index) are readable.
+    user: "${UID:-1000}:${GID:-1000}"
+    ports:
+      - "127.0.0.1:47822:47821"
+    volumes:
+      - ${XDG_DATA_HOME:-${HOME}/.local/share}/screentime:/data
+      # App names and icons come from the host's desktop files and icon themes.
+      - /usr/share/applications:/usr/share/applications:ro
+      - /usr/share/icons:/usr/share/icons:ro
+      - /usr/share/pixmaps:/usr/share/pixmaps:ro
+      - /var/lib/snapd/desktop:/var/lib/snapd/desktop:ro
+      - /var/lib/flatpak/exports/share:/var/lib/flatpak/exports/share:ro
+      - ${HOME}/.local/share/applications:/home/screentime/.local/share/applications:ro
+      - ${HOME}/.local/share/icons:/home/screentime/.local/share/icons:ro
+      # Optional category overrides.
+      - ${XDG_CONFIG_HOME:-${HOME}/.config}/screentime:/home/screentime/.config/screentime:ro
+    restart: unless-stopped

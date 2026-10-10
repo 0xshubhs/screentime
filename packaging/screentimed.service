@@ -1,0 +1,14 @@
+[Unit]
+Description=Screen Time for Linux (usage tracker and dashboard)
+Documentation=https://github.com/0xshubhs/screentime
+# Runs for the length of the desktop session: starts at every login, stops at logout.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=@BINDIR@/screentimed
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target

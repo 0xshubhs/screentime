@@ -29,6 +29,13 @@
 "org.kde.krita.desktop" = "Creativity"
 "blender.desktop" = "Creativity"
 "org.gnome.Nautilus.desktop" = "Utilities"
+"brave-browser.desktop" = "Utilities"
+"com.brave.Browser.desktop" = "Utilities"
+"google-chrome.desktop" = "Utilities"
+"com.google.Chrome.desktop" = "Utilities"
+"firefox_firefox.desktop" = "Utilities"
+"firefox.desktop" = "Utilities"
+"chromium_chromium.desktop" = "Utilities"
 "org.gnome.Settings.desktop" = "Utilities"
 "org.gnome.TextEditor.desktop" = "Utilities"
 
