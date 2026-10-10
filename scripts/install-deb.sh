@@ -9,6 +9,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Ask for the password first, before anything is built or removed, so a failed sudo leaves
+# the current install untouched.
+if ! sudo -v; then
+  echo "sudo is needed to install the package. Run this from a terminal where you can type your password." >&2
+  exit 1
+fi
+
 DEB="${1:-}"
 if [[ -z "$DEB" ]]; then
   ./packaging/build-deb.sh
