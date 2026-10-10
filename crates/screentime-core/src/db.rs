@@ -1,4 +1,8 @@
 //! SQLite store. All timestamps are Unix milliseconds.
+//!
+//! The database lives in the user's data directory, independent of the installed binaries,
+//! so reinstalls and upgrades keep all history. Schema changes are numbered migrations,
+//! each applied in one transaction together with its `user_version` bump, after a backup.
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +15,16 @@ pub type Result<T> = rusqlite::Result<T>;
 pub type IfaceRow = (i64, String, String, u64, u64);
 
 pub const SLOT_MS: i64 = 15 * 60 * 1000;
+
+/// Schema migrations in order; `PRAGMA user_version` records how many are applied.
+/// Never edit a released migration: add a new file instead.
+const MIGRATIONS: &[&str] = &[
+    include_str!("migrations/0001_initial.sql"),
+    include_str!("migrations/0002_media_usage.sql"),
+];
+
+/// Pre-migration backups kept next to the database.
+const BACKUPS_KEPT: usize = 5;
 
 pub struct Db {
     conn: Connection,
@@ -28,11 +42,21 @@ pub(crate) fn home() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| "/".into())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The focused app while the user is active.
+    App,
+    /// The site in the focused browser tab.
+    Web,
+    /// An app playing media, whether or not it is focused.
+    Media,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsageRow {
     pub start_ms: i64,
     pub end_ms: i64,
-    pub web: bool,
+    pub kind: Kind,
     pub app_id: String,
     pub domain: Option<String>,
 }
@@ -42,7 +66,7 @@ impl Db {
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        Self::init(Connection::open(path)?)
+        Self::init(Connection::open(path)?, Some(path))
     }
 
     /// Read-only access for reporting (the CLI, or the dashboard container).
@@ -53,13 +77,38 @@ impl Db {
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?)
+        Self::init(Connection::open_in_memory()?, None)
     }
 
-    fn init(conn: Connection) -> Result<Self> {
+    fn init(conn: Connection, path: Option<&Path>) -> Result<Self> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch(crate::SCHEMA)?;
+        // WAL lets readers (dashboard, CLI) run alongside the writer; FULL syncs the WAL on
+        // every commit, so a committed write survives a crash or power loss.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
+        migrate(&conn, path)?;
         Ok(Self { conn })
+    }
+
+    /// Schema version (number of migrations applied).
+    pub fn schema_version(&self) -> Result<i64> {
+        self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))
+    }
+
+    /// Runs `f` in one transaction: all of its writes commit together or none do.
+    pub fn atomically<T>(&self, f: impl FnOnce(&Self) -> Result<T>) -> Result<T> {
+        let tx = self.conn.unchecked_transaction()?;
+        let v = f(self)?;
+        tx.commit()?;
+        Ok(v)
+    }
+
+    pub fn open_media(&self, now: i64, app_id: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (?1, ?1, 'media', ?2)",
+            params![now, app_id],
+        )?;
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn open_usage(&self, now: i64, app_id: &str, domain: Option<&str>) -> Result<i64> {
@@ -135,22 +184,16 @@ impl Db {
             Ok(UsageRow {
                 start_ms: r.get(0)?,
                 end_ms: r.get(1)?,
-                web: r.get::<_, String>(2)? == "web",
+                kind: match r.get::<_, String>(2)?.as_str() {
+                    "web" => Kind::Web,
+                    "media" => Kind::Media,
+                    _ => Kind::App,
+                },
                 app_id: r.get(3)?,
                 domain: r.get(4)?,
             })
         })?;
         rows.collect()
-    }
-
-    /// Total foreground app time in [from, to), clipped to the range.
-    pub fn app_total_between(&self, from: i64, to: i64) -> Result<i64> {
-        self.conn.query_row(
-            "SELECT COALESCE(SUM(MIN(end_ms, ?2) - MAX(start_ms, ?1)), 0) FROM usage
-             WHERE kind = 'app' AND start_ms < ?2 AND end_ms > ?1",
-            params![from, to],
-            |r| r.get(0),
-        )
     }
 
     /// (ts_ms, kind, first_app)
@@ -200,6 +243,126 @@ impl Db {
     }
 }
 
+/// Brings the schema up to date. Each pending migration and its version bump run in a single
+/// transaction (SQLite DDL is transactional), so an interrupted upgrade rolls back cleanly.
+fn migrate(conn: &Connection, path: Option<&Path>) -> Result<()> {
+    let current: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    let target = MIGRATIONS.len() as i64;
+    if current > target {
+        // Written by a newer screentime; refuse rather than corrupt it.
+        return Err(Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_MISMATCH),
+            Some(format!("database schema v{current} is newer than this build (v{target}); upgrade screentime")),
+        ));
+    }
+    if current == target {
+        return Ok(());
+    }
+    let has_data: bool =
+        conn.query_row("SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table'", [], |r| r.get(0))?;
+    if let (Some(path), true) = (path, has_data) {
+        backup(conn, path, current)?;
+    }
+    for (i, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.pragma_update(None, "user_version", i as i64 + 1)?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
+/// Consistent copy of the database (`VACUUM INTO`) before changing its schema, e.g.
+/// `screentime.db.v1-1791700000.bak`. Keeps the newest few.
+fn backup(conn: &Connection, path: &Path, version: i64) -> Result<()> {
+    let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("screentime.db");
+    let dest = path.with_file_name(format!("{name}.v{version}-{ts}.bak"));
+    conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy()])?;
+
+    if let Some(dir) = path.parent() {
+        let prefix = format!("{name}.v");
+        let mut old: Vec<PathBuf> = std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix) && n.ends_with(".bak"))
+            })
+            .collect();
+        old.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+        let excess = old.len().saturating_sub(BACKUPS_KEPT);
+        for p in old.into_iter().take(excess) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+    Ok(())
+}
+
 fn slot(ts_ms: i64) -> i64 {
     ts_ms - ts_ms.rem_euclid(SLOT_MS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("screentime-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("screentime.db")
+    }
+
+    #[test]
+    fn upgrades_a_v1_database_keeping_every_row() {
+        let path = scratch("upgrade");
+        {
+            // A database as 0.1.0 left it: the initial schema, no user_version.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute("INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (1, 2, 'app', 'code.desktop')", []).unwrap();
+            conn.execute("INSERT INTO usage (start_ms, end_ms, kind, app_id, domain) VALUES (3, 4, 'web', 'brave-browser.desktop', 'github.com')", []).unwrap();
+            conn.execute("INSERT INTO pickups (ts_ms, kind) VALUES (5, 'login')", []).unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len() as i64);
+        let rows = db.usage_between(0, 10).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].domain.as_deref(), Some("github.com"));
+        assert_eq!(db.pickups_between(0, 10).unwrap().len(), 1);
+        // The new kind is accepted now.
+        db.open_media(6, "vlc.desktop").unwrap();
+        // A backup of the old file was taken first.
+        let backups = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".bak"))
+            .count();
+        assert_eq!(backups, 1);
+        // Reopening is a no-op: no second backup, same data.
+        drop(db);
+        let db = Db::open(&path).unwrap();
+        assert_eq!(db.usage_between(0, 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn refuses_a_newer_schema() {
+        let path = scratch("newer");
+        Connection::open(&path).unwrap().pragma_update(None, "user_version", 99).unwrap();
+        assert!(Db::open(&path).is_err());
+    }
+
+    #[test]
+    fn atomically_rolls_back_on_error() {
+        let db = Db::open_in_memory().unwrap();
+        let r: Result<()> = db.atomically(|db| {
+            db.add_notification(1, "a.desktop")?;
+            db.conn.execute("INSERT INTO nope VALUES (1)", [])?;
+            Ok(())
+        });
+        assert!(r.is_err());
+        assert!(db.notifications_between(0, 10).unwrap().is_empty());
+    }
 }

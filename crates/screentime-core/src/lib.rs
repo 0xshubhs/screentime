@@ -8,13 +8,13 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-/// SQLite schema for the usage store.
-pub const SCHEMA: &str = include_str!("schema.sql");
-
 /// Focus targets that are not apps a person uses: the desktop-icons window (a bare gjs
-/// window) and windows without a class (shell surfaces).
+/// window), windows without a class (shell surfaces), and Screen Time itself.
 pub fn is_ignored_app(id: &str) -> bool {
-    matches!(id.to_ascii_lowercase().as_str(), "" | "wm:" | "wm:gjs" | "wm:unknown")
+    matches!(
+        id.to_ascii_lowercase().as_str(),
+        "" | "wm:" | "wm:gjs" | "wm:unknown" | "dev.zeroxshubhs.screentime.desktop"
+    )
 }
 
 /// Fallback category when no rule matches.

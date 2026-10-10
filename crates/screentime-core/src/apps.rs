@@ -92,6 +92,39 @@ impl AppIndex {
         }
     }
 
+    /// Desktop id for an MPRIS player from its DesktopEntry, Identity and bus name suffix
+    /// (`org.mpris.MediaPlayer2.<suffix>`, e.g. "vlc" or "brave.instance123").
+    pub fn id_for_player(&self, entry: &str, identity: &str, bus_suffix: &str) -> String {
+        let entry = entry.trim_end_matches(".desktop");
+        if !entry.is_empty() {
+            let id = format!("{entry}.desktop");
+            if self.by_id.contains_key(&id) {
+                return id;
+            }
+        }
+        if !identity.is_empty() {
+            if let Some(i) = self.lookup(&format!("name:{identity}")) {
+                return i.id.clone();
+            }
+        }
+        let key = if entry.is_empty() { bus_suffix.split('.').next().unwrap_or("") } else { entry }.to_ascii_lowercase();
+        if key.len() >= 3 {
+            let found = self
+                .by_id
+                .values()
+                .filter(|i| !i.hidden && stem(&i.id).to_ascii_lowercase().contains(&key))
+                .min_by_key(|i| i.id.len());
+            if let Some(i) = found {
+                return i.id.clone();
+            }
+        }
+        if !entry.is_empty() {
+            format!("{entry}.desktop")
+        } else {
+            format!("name:{}", if identity.is_empty() { bus_suffix } else { identity })
+        }
+    }
+
     /// Best desktop id for a process, given its command name and executable path.
     pub fn id_for_process(&self, comm: &str, exe: Option<&Path>) -> String {
         let exe_real = exe.and_then(|p| std::fs::canonicalize(p).ok());

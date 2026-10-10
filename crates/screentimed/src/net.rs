@@ -105,6 +105,7 @@ pub async fn sampler(shared: Arc<Shared>) {
                 })
                 .filter(|(_, rx, tx)| rx + tx > 0)
                 .collect();
+            // One transaction per sample (Shared::with), so a sample is stored whole or not at all.
             shared.with(|db, _, _| {
                 for (name, rx, tx) in &deltas {
                     db.add_net_iface(now, name, iface_kind(name), *rx, *tx)?;

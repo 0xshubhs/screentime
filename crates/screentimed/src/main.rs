@@ -31,11 +31,13 @@ pub struct Shared {
 }
 
 impl Shared {
-    /// Runs `f` with the database and tracker locked, logging (not propagating) errors.
+    /// Runs `f` with the database and tracker locked, as one transaction: every write an
+    /// event makes (close one row, open the next) commits together or not at all. Errors
+    /// are logged, not propagated.
     pub fn with<T>(&self, f: impl FnOnce(&Db, &mut Tracker, &Rules) -> db::Result<T>) -> Option<T> {
         let mut guard = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let (db, tracker) = &mut *guard;
-        f(db, tracker, &self.rules).map_err(|e| eprintln!("db: {e}")).ok()
+        db.atomically(|db| f(db, tracker, &self.rules)).map_err(|e| eprintln!("db: {e}")).ok()
     }
 }
 
@@ -74,6 +76,33 @@ fn args() -> Args {
     a
 }
 
+/// App tracking needs the GNOME Shell extension. The .deb installs it system-wide, which GNOME
+/// does not enable on its own, so turn it on for this user if it is off. If the shell has not
+/// seen it yet (installed during this session), it is added to the list for the next login.
+fn ensure_extension_enabled() {
+    use std::process::Command;
+    const UUID: &str = "screentime@0xshubhs";
+    if !std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().contains("GNOME") {
+        return;
+    }
+    let Ok(out) = Command::new("gsettings").args(["get", "org.gnome.shell", "enabled-extensions"]).output() else {
+        return;
+    };
+    let current = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || current.contains(UUID) {
+        return;
+    }
+    if Command::new("gnome-extensions").args(["enable", UUID]).status().is_ok_and(|s| s.success()) {
+        return;
+    }
+    let list = if current == "@as []" || current == "[]" {
+        format!("['{UUID}']")
+    } else {
+        format!("{}, '{UUID}']", current.trim_end_matches(']'))
+    };
+    let _ = Command::new("gsettings").args(["set", "org.gnome.shell", "enabled-extensions", &list]).status();
+}
+
 /// Runs a background task, logging why it stopped.
 fn spawn<F>(name: &'static str, fut: F)
 where
@@ -100,10 +129,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     if shared.tracking {
+        ensure_extension_enabled();
         match zbus::Connection::session().await {
             Ok(session) => {
                 spawn("focus", session::focus(shared.clone(), session.clone()));
                 spawn("idle", session::idle(shared.clone(), session.clone()));
+                spawn("media", session::media(shared.clone(), session.clone()));
                 spawn("screensaver", session::screensaver(shared.clone(), session));
                 spawn("notifications", notify::monitor(shared.clone()));
             }

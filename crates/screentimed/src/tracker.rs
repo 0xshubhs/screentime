@@ -2,9 +2,11 @@
 //! the tracker keeps at most one open `app` row and one open `web` row and closes or opens
 //! them whenever the "what is the user doing right now" answer changes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use screentime_core::db::{Db, Result};
+#[cfg(test)]
+use screentime_core::db::Kind;
 use screentime_core::Rules;
 
 /// Idle time after which usage stops counting (unless media is playing).
@@ -53,6 +55,10 @@ pub struct Tracker {
     pub sleeping: bool,
     /// Set from the tray or dashboard; nothing is recorded while paused.
     pub paused: bool,
+    /// Apps currently playing media (MPRIS PlaybackStatus = Playing).
+    pub playing: HashSet<String>,
+    /// Open `media` rows by app.
+    open_media: HashMap<String, i64>,
     web: HashMap<String, WebState>,
     open_app: Option<Open>,
     open_web: Option<Open>,
@@ -79,9 +85,38 @@ impl Tracker {
     }
 
     /// Media keeps the clock running while the user is not touching the keyboard.
-    fn media_playing(&self, rules: &Rules) -> bool {
-        self.current_web().is_some_and(|w| w.audible)
-            || self.focus.as_deref().is_some_and(|f| rules.categorize_app(f) == "Entertainment")
+    /// The focused app is playing audio/video, so no input does not mean the user left.
+    fn media_playing(&self) -> bool {
+        self.current_web().is_some_and(|w| w.audible) || self.focus.as_ref().is_some_and(|f| self.playing.contains(f))
+    }
+
+    /// Playback counts while the screen is on (not locked, asleep or paused), focused or not.
+    fn sync_media(&mut self, db: &Db, now: i64) -> Result<()> {
+        let screen_on = !self.locked && !self.sleeping && !self.paused;
+        let stopped: Vec<String> =
+            self.open_media.keys().filter(|a| !screen_on || !self.playing.contains(*a)).cloned().collect();
+        for app in stopped {
+            if let Some(row) = self.open_media.remove(&app) {
+                db.extend_usage(row, now)?;
+            }
+        }
+        if screen_on {
+            for app in &self.playing {
+                if !self.open_media.contains_key(app) {
+                    let row = db.open_media(now, app)?;
+                    self.open_media.insert(app.clone(), row);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn on_media(&mut self, db: &Db, now: i64, playing: HashSet<String>) -> Result<()> {
+        if playing == self.playing {
+            return Ok(());
+        }
+        self.playing = playing;
+        self.sync_media(db, now)
     }
 
     /// Opens/closes rows so the database matches the current state. `end` is the time
@@ -113,7 +148,10 @@ impl Tracker {
     }
 
     pub fn on_focus(&mut self, db: &Db, now: i64, app: Option<String>) -> Result<()> {
-        let app = app.filter(|a| !screentime_core::is_ignored_app(a));
+        let app = app.filter(|a| !screentime_core::is_ignored_app(a)).map(|a| {
+            // Nautilus windows can report their location ("location:trash:///") as the app id.
+            if a.starts_with("location:") { "org.gnome.Nautilus.desktop".to_string() } else { a }
+        });
         if app == self.focus {
             return Ok(());
         }
@@ -135,8 +173,8 @@ impl Tracker {
     }
 
     /// `idle_ms` is the time since the last input event.
-    pub fn on_idle_time(&mut self, db: &Db, rules: &Rules, now: i64, idle_ms: i64) -> Result<()> {
-        let idle = idle_ms >= IDLE_MS && !self.media_playing(rules);
+    pub fn on_idle_time(&mut self, db: &Db, _rules: &Rules, now: i64, idle_ms: i64) -> Result<()> {
+        let idle = idle_ms >= IDLE_MS && !self.media_playing();
         if idle == self.idle {
             return Ok(());
         }
@@ -158,12 +196,14 @@ impl Tracker {
             self.pickup = Some(PendingPickup { id, deadline });
             self.idle = false;
         }
-        self.sync(db, now, now)
+        self.sync(db, now, now)?;
+        self.sync_media(db, now)
     }
 
     pub fn on_pause(&mut self, db: &Db, now: i64, paused: bool) -> Result<()> {
         self.paused = paused;
-        self.sync(db, now, now)
+        self.sync(db, now, now)?;
+        self.sync_media(db, now)
     }
 
     pub fn on_sleep(&mut self, db: &Db, now: i64, sleeping: bool) -> Result<()> {
@@ -171,7 +211,8 @@ impl Tracker {
         if !sleeping {
             self.idle = false;
         }
-        self.sync(db, now, now)
+        self.sync(db, now, now)?;
+        self.sync_media(db, now)
     }
 
     /// Records the session login as a pickup (idempotent across daemon restarts).
@@ -188,6 +229,9 @@ impl Tracker {
         for o in [&self.open_app, &self.open_web].into_iter().flatten() {
             db.extend_usage(o.row, now)?;
         }
+        for row in self.open_media.values() {
+            db.extend_usage(*row, now)?;
+        }
         Ok(())
     }
 
@@ -195,6 +239,7 @@ impl Tracker {
         self.heartbeat(db, now)?;
         self.open_app = None;
         self.open_web = None;
+        self.open_media.clear();
         Ok(())
     }
 }
@@ -209,7 +254,8 @@ mod tests {
         db.usage_between(0, i64::MAX)
             .unwrap()
             .into_iter()
-            .map(|r| (r.start_ms, r.end_ms, r.web, r.app_id, r.domain))
+            .filter(|r| r.kind != Kind::Media)
+            .map(|r| (r.start_ms, r.end_ms, r.kind == Kind::Web, r.app_id, r.domain))
             .collect()
     }
 
@@ -262,6 +308,29 @@ mod tests {
         Tracker::default().on_login(&db, 0).unwrap();
         let p = db.pickups_between(0, i64::MAX).unwrap();
         assert_eq!(p, vec![(0, "login".into(), Some("code.desktop".into()))]);
+    }
+
+    #[test]
+    fn media_plays_in_background_until_lock() {
+        let db = Db::open_in_memory().unwrap();
+        let rules = Rules::builtin();
+        let mut t = Tracker::default();
+        t.on_focus(&db, 0, Some("vlc.desktop".into())).unwrap();
+        t.on_media(&db, 0, HashSet::from(["vlc.desktop".to_string()])).unwrap();
+        // Watching without touching anything: not idle, because the focused app plays.
+        t.on_idle_time(&db, &rules, 10 * M, 10 * M).unwrap();
+        assert!(!t.idle);
+        // Switch to the browser; VLC keeps playing in the background.
+        t.on_focus(&db, 10 * M, Some("brave-browser.desktop".into())).unwrap();
+        t.on_lock(&db, 36 * M, true).unwrap();
+        let media: Vec<_> = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Media).collect();
+        assert_eq!(media.len(), 1);
+        assert_eq!((media[0].start_ms, media[0].end_ms), (0, 36 * M));
+        // Unlocking while still playing resumes it.
+        t.on_lock(&db, 40 * M, false).unwrap();
+        t.shutdown(&db, 41 * M).unwrap();
+        let media = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Media).count();
+        assert_eq!(media, 2);
     }
 
     #[test]

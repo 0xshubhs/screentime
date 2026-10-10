@@ -4,6 +4,9 @@
 [apps]
 "code.desktop" = "Developer Tools"
 "code-url-handler.desktop" = "Developer Tools"
+"com.microsoft.VSCode.desktop" = "Developer Tools"
+"com.visualstudio.code.desktop" = "Developer Tools"
+"code_code.desktop" = "Developer Tools"
 "cursor.desktop" = "Developer Tools"
 "dev.zed.Zed.desktop" = "Developer Tools"
 "org.gnome.Ptyxis.desktop" = "Developer Tools"

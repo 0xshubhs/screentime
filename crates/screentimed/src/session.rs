@@ -62,6 +62,48 @@ pub async fn idle(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
     }
 }
 
+/// Media players (MPRIS): which apps are playing right now. Polled, because players come and
+/// go and some never emit PropertiesChanged reliably.
+pub async fn media(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
+    let bus = zbus::fdo::DBusProxy::new(&conn).await?;
+    let mut ids: std::collections::HashMap<String, String> = Default::default();
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        tick.tick().await;
+        let names = match bus.list_names().await {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("media: {e}");
+                continue;
+            }
+        };
+        let players: Vec<String> = names
+            .iter()
+            .map(|n| n.as_str().to_string())
+            .filter(|n| n.starts_with("org.mpris.MediaPlayer2."))
+            .collect();
+        ids.retain(|n, _| players.contains(n));
+        let mut playing = std::collections::HashSet::new();
+        for name in &players {
+            let Ok(player) = proxy(&conn, name, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2.Player").await else { continue };
+            let status: String = player.get_property("PlaybackStatus").await.unwrap_or_default();
+            if status != "Playing" {
+                continue;
+            }
+            if !ids.contains_key(name) {
+                let Ok(root) = proxy(&conn, name, "/org/mpris/MediaPlayer2", "org.mpris.MediaPlayer2").await else { continue };
+                let entry: String = root.get_property("DesktopEntry").await.unwrap_or_default();
+                let identity: String = root.get_property("Identity").await.unwrap_or_default();
+                let suffix = name.trim_start_matches("org.mpris.MediaPlayer2.");
+                let id = shared.apps.read().unwrap().id_for_player(&entry, &identity, suffix);
+                ids.insert(name.clone(), id);
+            }
+            playing.insert(ids[name].clone());
+        }
+        shared.with(|db, t, _| t.on_media(db, now_ms(), playing));
+    }
+}
+
 /// Lock and unlock. Each unlock is a pickup.
 pub async fn screensaver(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
     let ss = proxy(&conn, "org.gnome.ScreenSaver", "/org/gnome/ScreenSaver", "org.gnome.ScreenSaver").await?;

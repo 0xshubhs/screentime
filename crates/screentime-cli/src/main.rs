@@ -27,7 +27,11 @@ pub fn open_dashboard(base: &str, view: Option<&str>) {
     let app = sibling.filter(|p| p.is_file()).map(Into::into).unwrap_or_else(|| std::ffi::OsString::from("screentime-app"));
     let mut cmd = std::process::Command::new(app);
     cmd.args(view);
-    if cmd.spawn().is_err() {
+    if let Ok(mut child) = cmd.spawn() {
+        // The tray is long-lived: reap the child when it exits so it does not linger as a
+        // zombie (the app hands off to an already-open window and exits right away).
+        std::thread::spawn(move || child.wait());
+    } else {
         let hash = view.map(|v| format!("#/{v}/{}", Local::now().format("%Y-%m-%d"))).unwrap_or_default();
         let _ = std::process::Command::new("xdg-open").arg(format!("{base}/{hash}")).spawn();
     }

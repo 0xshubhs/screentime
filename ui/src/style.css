@@ -277,11 +277,11 @@ main { max-width: 960px; margin: 0 auto; padding: 20px 16px 64px; display: flex;
 .embedded .top { display: none; }
 .embedded main { padding-top: 8px; }
 
-/* Bars grow in when a view opens; background refreshes update without motion. */
-.animate .chart .bar { transform-box: fill-box; transform-origin: bottom; animation: grow 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
-.animate .meter > div, .animate .bar-line .fill { transform-origin: left; animation: grow-x 0.35s cubic-bezier(0.2, 0.8, 0.2, 1); }
-@keyframes grow { from { transform: scaleY(0); } }
-@keyframes grow-x { from { transform: scaleX(0); } }
+/* List bars slide to new lengths (main.ts sets the old length first, then the new one). */
+@property --f { syntax: "<number>"; inherits: false; initial-value: 0; }
+.bar-line .fill { transition: --f 0.7s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.meter > div { transition: width 0.7s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @media (prefers-reduced-motion: reduce) {
-  .animate .chart .bar, .animate .meter > div, .animate .bar-line .fill { animation: none; }
+  .bar-line .fill, .meter > div { transition: none; }
 }
+

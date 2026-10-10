@@ -1,4 +1,4 @@
-PRAGMA journal_mode = WAL;
+-- 0001: initial schema (released in 0.1.0). Never edit a released migration; add a new one.
 
 -- One row per continuous span of focused, non-idle use. kind = 'app' rows are the source of
 -- truth for totals; kind = 'web' rows break browser time down by site.

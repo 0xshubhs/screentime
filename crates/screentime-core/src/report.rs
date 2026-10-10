@@ -8,7 +8,7 @@ use chrono::{Local, NaiveDate, TimeZone, Timelike};
 use serde::Serialize;
 
 use crate::apps::AppIndex;
-use crate::db::{Db, Result};
+use crate::db::{Db, Kind, Result, UsageRow};
 use crate::Rules;
 
 const HOUR_MS: i64 = 3_600_000;
@@ -255,9 +255,10 @@ pub fn build(
         Filter::Category(c) => Some(c.as_str()),
         _ => None,
     };
-    for r in rows.iter().filter(|r| !crate::is_ignored_app(&r.app_id)) {
+    let rows: Vec<&UsageRow> = rows.iter().filter(|r| !crate::is_ignored_app(&r.app_id)).collect();
+    for r in rows.iter().filter(|r| r.kind != Kind::Media) {
         let (s, e) = (r.start_ms.max(start), r.end_ms.min(end));
-        if r.web {
+        if r.kind == Kind::Web {
             let domain = r.domain.as_deref().unwrap_or_default();
             let site_cat = rules.categorize_domain(domain).to_string();
             let browser_cat = ctx.app_cat(&r.app_id).to_string();
@@ -301,6 +302,47 @@ pub fn build(
             }
         }
     }
+
+    // Media playing in a window that is not focused (a video in VLC while browsing) is still
+    // use. It counts toward its app, and toward totals only where no other app was in use,
+    // so the same minute is never counted twice.
+    let focused: Vec<(i64, i64, &str)> = rows
+        .iter()
+        .filter(|r| r.kind == Kind::App)
+        .map(|r| (r.start_ms.max(start), r.end_ms.min(end), r.app_id.as_str()))
+        .collect();
+    let mut counted_until = i64::MIN;
+    for m in rows.iter().filter(|r| r.kind == Kind::Media) {
+        let keep = match filter {
+            Filter::None | Filter::Category(_) => true,
+            Filter::App(a) => *a == m.app_id,
+            Filter::Domain(_) => false,
+        };
+        if !keep {
+            continue;
+        }
+        let cat = ctx.app_cat(&m.app_id).to_string();
+        for (s, e, owner) in uncovered_by(&focused, m.start_ms.max(start), m.end_ms.min(end)) {
+            if owner == Some(m.app_id.as_str()) {
+                continue; // already counted as focused time
+            }
+            if cat_filter.is_none_or(|c| c == cat) {
+                *app_ms.entry(m.app_id.clone()).or_default() += e - s;
+            }
+            // For one app's view, its background playback is its time even under another app.
+            if owner.is_none() || matches!(filter, Filter::App(_)) {
+                let s = s.max(counted_until);
+                if s < e {
+                    counted_until = e;
+                    spread(&bounds, s, e, |i, d| {
+                        buckets[i].total_ms += d;
+                        *buckets[i].categories.entry(cat.clone()).or_default() += d;
+                    });
+                }
+            }
+        }
+    }
+
     for b in &mut buckets {
         b.categories.retain(|k, v| *v > 0 && cat_filter.is_none_or(|c| c == k));
         if cat_filter.is_some() {
@@ -352,7 +394,7 @@ pub fn build(
         let mut d = from;
         for _ in 0..days {
             d = d.pred_opt().unwrap();
-            totals.push(db.app_total_between(day_start(d), day_end(d))?);
+            totals.push(screen_total(db, day_start(d), day_end(d))?);
         }
         let with_data: Vec<i64> = totals.into_iter().filter(|&t| t > 0).collect();
         (!with_data.is_empty()).then(|| with_data.iter().sum::<i64>() / with_data.len() as i64)
@@ -474,6 +516,51 @@ pub fn build(
     })
 }
 
+/// Splits [s, e) into pieces labeled with the focused app covering them (None = nothing
+/// focused). `focused` is sorted and non-overlapping.
+fn uncovered_by<'a>(focused: &[(i64, i64, &'a str)], s: i64, e: i64) -> Vec<(i64, i64, Option<&'a str>)> {
+    let mut out = Vec::new();
+    let mut cur = s;
+    let first = focused.partition_point(|f| f.1 <= s);
+    for &(fs, fe, id) in &focused[first..] {
+        if fs >= e {
+            break;
+        }
+        if fs > cur {
+            out.push((cur, fs, None));
+        }
+        let (a, b) = (fs.max(cur), fe.min(e));
+        if b > a {
+            out.push((a, b, Some(id)));
+            cur = b;
+        }
+    }
+    if cur < e {
+        out.push((cur, e, None));
+    }
+    out
+}
+
+/// Screen time in [from, to): the union of focused use and media playback.
+fn screen_total(db: &Db, from: i64, to: i64) -> Result<i64> {
+    let mut iv: Vec<(i64, i64)> = db
+        .usage_between(from, to)?
+        .into_iter()
+        .filter(|r| r.kind != Kind::Web && !crate::is_ignored_app(&r.app_id))
+        .map(|r| (r.start_ms.max(from), r.end_ms.min(to)))
+        .collect();
+    iv.sort_unstable();
+    let (mut total, mut until) = (0, i64::MIN);
+    for (s, e) in iv {
+        let s = s.max(until);
+        if e > s {
+            total += e - s;
+            until = e;
+        }
+    }
+    Ok(total)
+}
+
 /// "3h 25m", "12m", "45s".
 pub fn fmt_duration(ms: i64) -> String {
     let s = ms / 1000;
@@ -539,6 +626,31 @@ mod tests {
 
         let only = build(&db, &rules, &AppIndex::default(), d, d, &Filter::Category("Entertainment".into()), at(d, 23, 0)).unwrap();
         assert_eq!(only.total_ms, 30 * 60_000);
+    }
+
+    #[test]
+    fn background_media_counts_without_double_counting() {
+        let db = Db::open_in_memory().unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
+        // VLC plays 10:00-10:36. Focus: VLC 10:00-10:05, Brave 10:05-10:30, VLC 10:30-10:36.
+        let m = db.open_media(at(d, 10, 0), "vlc.desktop").unwrap();
+        db.extend_usage(m, at(d, 10, 36)).unwrap();
+        for (a, b, app) in [(0, 5, "vlc.desktop"), (5, 30, "brave-browser.desktop"), (30, 36, "vlc.desktop")] {
+            let id = db.open_usage(at(d, 10, a), app, None).unwrap();
+            db.extend_usage(id, at(d, 10, b)).unwrap();
+        }
+        // And 5 more minutes of VLC playing after the user walked away.
+        let m = db.open_media(at(d, 11, 0), "vlc.desktop").unwrap();
+        db.extend_usage(m, at(d, 11, 5)).unwrap();
+
+        let r = build(&db, &Rules::builtin(), &AppIndex::default(), d, d, &Filter::None, at(d, 23, 0)).unwrap();
+        let app = |id: &str| r.apps.iter().find(|a| a.id == id).unwrap().ms / 60_000;
+        assert_eq!(app("vlc.desktop"), 41);
+        assert_eq!(app("brave-browser.desktop"), 25);
+        assert_eq!(r.total_ms / 60_000, 41);
+
+        let vlc = build(&db, &Rules::builtin(), &AppIndex::default(), d, d, &Filter::App("vlc.desktop".into()), at(d, 23, 0)).unwrap();
+        assert_eq!(vlc.total_ms / 60_000, 41);
     }
 
     #[test]

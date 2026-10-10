@@ -1,5 +1,5 @@
 import "./style.css";
-import { barChart, byteScale, countScale, durationScale, durationTick, hideTip, hourScale, meter, type Column } from "./charts";
+import { barChart, byteScale, captureBars, countScale, durationScale, durationTick, hideTip, hourScale, meter, slideBars, tweenNumbers, type Column } from "./charts";
 import * as dates from "./dates";
 import { bytes, clock, count, dur, esc, pct } from "./format";
 import type { AppCount, Filter, Report, Status, View } from "./types";
@@ -77,8 +77,8 @@ function reportUrl(from: string, to: string, filter?: Filter): string {
 let lastData = "";
 
 /**
- * `quiet` is a background refresh: no bar animation, no redraw when the data is unchanged,
- * and the scroll position is kept.
+ * `quiet` is a background refresh: no redraw when the data is unchanged, and the scroll
+ * position is kept. Changed numbers animate from their old values either way.
  */
 async function load(quiet = false) {
   const seq = ++loadSeq;
@@ -98,10 +98,8 @@ async function load(quiet = false) {
     status = s;
     weekReport = w;
     const scroll = window.scrollY;
-    app.classList.toggle("animate", !quiet);
     render();
     if (quiet) window.scrollTo(0, scroll);
-    else setTimeout(() => app.classList.remove("animate"), 600);
   } catch (e) {
     // A blip during a background refresh keeps the last good data on screen.
     if (seq !== loadSeq || (quiet && report)) return;
@@ -203,11 +201,11 @@ function listRows<T>(key: string, items: T[], row: (item: T) => string, limit = 
   return h;
 }
 
-function countRow(a: AppCount, max: number, unit: string): string {
+function countRow(a: AppCount, max: number, unit: string, list: string): string {
   return `<li class="row" data-app="${esc(a.id)}" data-name="${esc(a.name)}" data-icon="${a.has_icon ? 1 : 0}">
     ${icon(a.id, a.name, a.has_icon)}
     <div class="row-main"><div class="row-top"><span class="name">${esc(a.name)}</span><span class="value">${count(a.count)}${unit}</span></div>
-    ${meter(a.count / max, "var(--accent)")}</div></li>`;
+    ${meter(a.count / max, "var(--accent)", `${list}|${a.id}`)}</div></li>`;
 }
 
 // Page
@@ -241,6 +239,7 @@ function render() {
 
   const now = current && s.focus && !s.idle && !s.locked ? `<span class="live"><i></i>Now: ${esc(s.focus)}${s.domain ? ` · ${esc(s.domain)}` : ""}</span>` : "";
 
+  const before = captureBars(app);
   app.innerHTML = `
   <header class="top">
     <div class="brand"><img src="/favicon.svg" alt=""><span>Screen Time</span></div>
@@ -262,7 +261,7 @@ function render() {
       <div class="hero-head">
         <div>
           <div class="hero-date">${esc(heroDate())}</div>
-          <div class="big">${dur(multi ? r.daily_avg_ms : r.total_ms)}</div>
+          <div class="big" data-num="hero|dur|${multi ? r.daily_avg_ms : r.total_ms}">${dur(multi ? r.daily_avg_ms : r.total_ms)}</div>
           <div class="sub">${multi ? `Daily average${compareText(r) ? " · " : ""}` : ""}${compareText(r)}${multi ? ` · Total ${dur(r.total_ms)}` : ""}</div>
         </div>
         <div class="hero-side">${now}</div>
@@ -286,22 +285,22 @@ function render() {
       <section class="card">
         <div class="card-head"><h2>Pickups</h2><span class="muted">logins and unlocks</span></div>
         <div class="stat-row">
-          <div><div class="big2">${count(r.pickups.count)}</div><div class="muted">${multi ? `${(r.pickups.count / Math.max(1, elapsedDays(r))).toFixed(1)} a day` : r.pickups.first_at_ms ? `First at ${clock(r.pickups.first_at_ms)}` : "No pickups yet"}</div></div>
+          <div><div class="big2" data-num="pickups|count|${r.pickups.count}">${count(r.pickups.count)}</div><div class="muted">${multi ? `${(r.pickups.count / Math.max(1, elapsedDays(r))).toFixed(1)} a day` : r.pickups.first_at_ms ? `First at ${clock(r.pickups.first_at_ms)}` : "No pickups yet"}</div></div>
           <div class="mini-stats"><span><b>${r.pickups.logins}</b> logins</span><span><b>${r.pickups.unlocks}</b> unlocks</span></div>
         </div>
         <div class="chart-box" id="pickup-chart"></div>
         <h3>First used after pickup</h3>
-        ${listRows("first", r.pickups.first_apps, (a) => countRow(a, r.pickups.first_apps[0].count, "×"), 5)}
+        ${listRows("first", r.pickups.first_apps, (a) => countRow(a, r.pickups.first_apps[0].count, "×", "first"), 5)}
       </section>
 
       <section class="card">
         <div class="card-head"><h2>Notifications</h2></div>
         <div class="stat-row">
-          <div><div class="big2">${count(r.notifications.count)}</div><div class="muted">${multi ? `${Math.round(r.notifications.count / Math.max(1, elapsedDays(r)))} a day` : `${r.notifications.apps.length} apps`}</div></div>
+          <div><div class="big2" data-num="notif|count|${r.notifications.count}">${count(r.notifications.count)}</div><div class="muted">${multi ? `${Math.round(r.notifications.count / Math.max(1, elapsedDays(r)))} a day` : `${r.notifications.apps.length} apps`}</div></div>
         </div>
         <div class="chart-box" id="notif-chart"></div>
         <h3>From</h3>
-        ${listRows("notif", r.notifications.apps, (a) => countRow(a, r.notifications.apps[0].count, ""), 5)}
+        ${listRows("notif", r.notifications.apps, (a) => countRow(a, r.notifications.apps[0].count, "", "notif"), 5)}
       </section>
     </div>
 
@@ -310,7 +309,7 @@ function render() {
         <div class="ifaces">${r.network.ifaces.map((i) => `<span class="chip">${i.kind === "wifi" ? "Wi-Fi" : "Ethernet"} <small>${esc(i.name)}</small> ${bytes(i.rx + i.tx)}</span>`).join("")}</div>
       </div>
       <div class="stat-row">
-        <div><div class="big2">${bytes(r.network.rx + r.network.tx)}</div><div class="muted">↓ ${bytes(r.network.rx)} downloaded · ↑ ${bytes(r.network.tx)} uploaded</div></div>
+        <div><div class="big2" data-num="net|bytes|${r.network.rx + r.network.tx}">${bytes(r.network.rx + r.network.tx)}</div><div class="muted">↓ ${bytes(r.network.rx)} downloaded · ↑ ${bytes(r.network.tx)} uploaded</div></div>
         <ul class="legend inline"><li><i style="background:var(--net-rx)"></i><span>Download</span></li><li><i style="background:var(--net-tx)"></i><span>Upload</span></li></ul>
       </div>
       <div class="chart-box" id="net-chart"></div>
@@ -321,6 +320,8 @@ function render() {
   </main>`;
 
   postState();
+  slideBars(app, before);
+  tweenNumbers(app, { dur, count: (v) => count(Math.round(v)), bytes: (v) => bytes(Math.round(v)) });
 
   // Charts
   if (state.view === "day" && weekReport) {
@@ -386,10 +387,10 @@ function heroDate(): string {
 }
 
 /** Screen Time row: icon, name, then a thin bar with the value beside it. */
-function appleRow(attrs: string, iconHtml: string, name: string, sub: string, fraction: number, color: string, value: string): string {
+function appleRow(key: string, attrs: string, iconHtml: string, name: string, sub: string, fraction: number, color: string, value: string): string {
   return `<li class="row" ${attrs}>${iconHtml}<div class="row-main">
     <div class="name">${esc(name)}${sub ? `<small>${esc(sub)}</small>` : ""}</div>
-    <div class="bar-line"><div class="fill" style="--f:${Math.min(1, fraction)};background:${color}"></div><span class="value">${value}</span></div></div><span class="chev">›</span></li>`;
+    <div class="bar-line"><div class="fill" data-k="${esc(key)}" style="--f:${Math.min(1, fraction)};background:${color}"></div><span class="value">${value}</span></div></div><span class="chev">›</span></li>`;
 }
 
 function mostUsed(r: Report, s: Status): string {
@@ -397,7 +398,7 @@ function mostUsed(r: Report, s: Status): string {
   const avg = (ms: number, a: number) => (multi ? `<small>${dur(a)}/day</small>` : "") + dur(ms);
   if (state.tab === "apps") {
     const max = r.apps[0]?.ms ?? 1;
-    return listRows("apps", r.apps, (a) => appleRow(
+    return listRows("apps", r.apps, (a) => appleRow(`app|${a.id}`,
       `data-app="${esc(a.id)}" data-name="${esc(a.name)}" data-icon="${a.has_icon ? 1 : 0}" data-category="${esc(a.category)}"`,
       icon(a.id, a.name, a.has_icon, a.category), a.name, a.category, a.ms / max, catColor(a.category), avg(a.ms, a.daily_avg_ms)), 8);
   }
@@ -406,16 +407,16 @@ function mostUsed(r: Report, s: Status): string {
       return `<p class="empty">No websites yet. Load the browser extension from <code>browser-extension/</code> (see README) to see time per site.</p>`;
     }
     const max = r.sites[0]?.ms ?? 1;
-    return listRows("sites", r.sites, (w) => appleRow(
+    return listRows("sites", r.sites, (w) => appleRow(`site|${w.domain}`,
       `data-domain="${esc(w.domain)}" data-category="${esc(w.category)}"`,
       siteIcon(w.domain, w.category), w.domain, w.category, w.ms / max, catColor(w.category), avg(w.ms, w.daily_avg_ms)), 8);
   }
   const max = r.categories[0]?.ms ?? 1;
   const days = Math.max(1, elapsedDays(r));
   const all = `<li class="row static all"><div class="icon swatch stack"></div><div class="row-main">
-    <div class="name">All Categories</div><div class="bar-line"><div class="fill" style="--f:1;background:var(--bar-muted)"></div><span class="value">${avg(r.total_ms, r.daily_avg_ms)}</span></div></div></li>`;
+    <div class="name">All Categories</div><div class="bar-line"><div class="fill" data-k="cat|all" style="--f:1;background:var(--bar-muted)"></div><span class="value">${avg(r.total_ms, r.daily_avg_ms)}</span></div></div></li>`;
   if (r.categories.length === 0) return `<p class="empty">Nothing recorded yet.</p>`;
-  return listRows("cats", r.categories, (c) => appleRow(`data-cat="${esc(c.name)}"`,
+  return listRows("cats", r.categories, (c) => appleRow(`cat|${c.name}`, `data-cat="${esc(c.name)}"`,
     `<div class="icon swatch" style="--tint:${catColor(c.name)}"></div>`, c.name, "", c.ms / max, catColor(c.name), avg(c.ms, Math.round(c.ms / days))), 13)
     .replace('<ul class="rows">', `<ul class="rows">${all}`);
 }
@@ -431,7 +432,7 @@ function netList(r: Report): string {
     ${icon(a.id, a.name, a.has_icon)}
     <div class="row-main"><div class="row-top"><span class="name">${esc(a.name)}${a.other ? "<small>not matched to an app</small>" : ""}</span>
     <span class="value"><small>↓ ${bytes(a.rx)}  ↑ ${bytes(a.tx)}</small>${bytes(a.rx + a.tx)}</span></div>
-    <div class="meter split"><div style="width:${(a.rx / max) * 100}%;background:var(--net-rx)"></div><div style="width:${(a.tx / max) * 100}%;background:var(--net-tx)"></div></div></div></li>`, 8);
+    <div class="meter split"><div data-k="net-rx|${esc(a.id)}" style="width:${(a.rx / max) * 100}%;background:var(--net-rx)"></div><div data-k="net-tx|${esc(a.id)}" style="width:${(a.tx / max) * 100}%;background:var(--net-tx)"></div></div></div></li>`, 8);
 }
 
 // Detail sheet for one app, site or category.
@@ -534,9 +535,8 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "d" || e.key === "w" || e.key === "m") go(({ d: "day", w: "week", m: "month" } as const)[e.key], state.anchor);
 });
 
-/** Redraw for a UI-only change (tab, expand) without replaying the intro animation. */
+/** Redraw for a UI-only change (tab, show all). */
 function rerender() {
-  app.classList.remove("animate");
   render();
 }
 
@@ -546,12 +546,12 @@ function stepDate(dir: 1 | -1) {
   go(state.view, next);
 }
 
-// Live refresh while looking at a range that includes today, and right away when the
-// window comes back into view. Quiet refreshes skip redraws when nothing changed.
+// Live refresh every minute while looking at a range that includes today, and right away
+// when the window comes back into view. Changed numbers and bars animate to their new values.
 const refresh = () => {
   if (isCurrent() && !document.hidden && !document.querySelector(".sheet-wrap")) load(true);
 };
-setInterval(refresh, 15_000);
+setInterval(refresh, 60_000);
 document.addEventListener("visibilitychange", refresh);
 window.addEventListener("focus", refresh);
 

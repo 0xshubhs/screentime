@@ -43,16 +43,43 @@ function barPath(x: number, y: number, w: number, h: number, r: number): string 
   return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
 }
 
-export function barChart(el: HTMLElement, cols: Column[], opt: ChartOptions): void {
-  const draw = () => {
+/** Last values drawn per chart (by element id), so the next draw can animate from them. */
+const previous = new Map<string, { values: number[][]; max: number; ref: number }>();
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+const DURATION = 700;
+const ease = (t: number) => 1 - (1 - t) ** 3;
+
+type ChartEl = HTMLElement & { _ro?: ResizeObserver; _raf?: number; _w?: number };
+
+/**
+ * Draws (or redraws) a bar chart. When the same chart (same element id) is drawn again with
+ * new numbers, bars and the axis glide from the old values to the new ones; a new chart
+ * grows its bars from zero. Unchanged data redraws without motion.
+ */
+export function barChart(host: HTMLElement, cols: Column[], opt: ChartOptions): void {
+  const el = host as ChartEl;
+  const target = cols.map((c) => c.parts.map((p) => p.value));
+  const dataMax = Math.max(0, ...target.map((r) => r.reduce((a, v) => a + v, 0)), opt.reference?.value ?? 0);
+  const { max, step } = opt.scale(dataMax);
+  const ref = opt.reference?.value ?? 0;
+
+  const prev = el.id ? previous.get(el.id) : undefined;
+  const sameShape = !!prev && prev.values.length === target.length && prev.values.every((r, i) => r.length === target[i].length);
+  const from = sameShape ? prev! : { values: target.map((r) => r.map(() => 0)), max, ref };
+  const changed =
+    !sameShape || from.max !== max || from.ref !== ref || target.some((r, i) => r.some((v, j) => v !== from.values[i][j]));
+  if (el.id) previous.set(el.id, { values: target, max, ref });
+
+  const draw = (t: number) => {
+    const lerp = (a: number, b: number) => a + (b - a) * t;
     const width = Math.max(240, el.clientWidth);
+    el._w = width;
     const height = opt.height ?? 180;
     const pad = { top: 8, right: 44, bottom: 22, left: 0 };
     const plotW = width - pad.left - pad.right;
     const plotH = height - pad.top - pad.bottom;
-    const dataMax = Math.max(0, ...cols.map((c) => c.parts.reduce((s, p) => s + p.value, 0)), opt.reference?.value ?? 0);
-    const { max, step } = opt.scale(dataMax);
-    const y = (v: number) => pad.top + plotH - (v / max) * plotH;
+    const scaleMax = lerp(from.max, max);
+    const y = (v: number) => pad.top + plotH - (v / scaleMax) * plotH;
     const band = plotW / Math.max(1, cols.length);
     const barW = Math.max(3, Math.min(24, band * 0.62));
 
@@ -63,6 +90,7 @@ export function barChart(el: HTMLElement, cols: Column[], opt: ChartOptions): vo
     let html = "";
 
     for (let v = 0; v <= max + 1e-9; v += step) {
+      if (v > scaleMax + 1e-9) break; // gridlines above the axis appear as it grows into them
       const yy = Math.round(y(v)) + 0.5;
       const edge = v === 0 || v + step > max + 1e-9;
       html += `<line class="grid" x1="${pad.left}" x2="${pad.left + plotW}" y1="${yy}" y2="${yy}"/>`;
@@ -82,9 +110,11 @@ export function barChart(el: HTMLElement, cols: Column[], opt: ChartOptions): vo
       const cx = pad.left + band * i + band / 2;
       const x = cx - barW / 2;
       let base = y(0);
-      const visible = c.parts.filter((p) => p.value > 0);
+      const visible = c.parts
+        .map((p, j) => ({ color: p.color, value: lerp(from.values[i][j], target[i][j]) }))
+        .filter((p) => p.value > 0);
       visible.forEach((p, j) => {
-        const h = (p.value / max) * plotH;
+        const h = (p.value / scaleMax) * plotH;
         const top = j === visible.length - 1;
         // Leave a surface gap above every segment that has another stacked on it.
         const drawH = Math.max(0, top ? h : h - GAP);
@@ -104,8 +134,9 @@ export function barChart(el: HTMLElement, cols: Column[], opt: ChartOptions): vo
       html += `<rect class="hit${c.onClick ? " clickable" : ""}" data-i="${i}" x="${pad.left + band * i}" y="${pad.top}" width="${band}" height="${plotH}"/>`;
     });
 
-    if (opt.reference && opt.reference.value > 0) {
-      const yy = Math.round(y(opt.reference.value)) + 0.5;
+    const refNow = lerp(from.ref, ref);
+    if (opt.reference && refNow > 0) {
+      const yy = Math.round(y(refNow)) + 0.5;
       html += `<line class="ref" x1="${pad.left}" x2="${pad.left + plotW}" y1="${yy}" y2="${yy}"/>`;
       html += `<text class="ref-label" x="${pad.left + plotW + 6}" y="${yy + 4}">${esc(opt.reference.label)}</text>`;
     }
@@ -120,11 +151,68 @@ export function barChart(el: HTMLElement, cols: Column[], opt: ChartOptions): vo
     });
     el.replaceChildren(svg);
   };
-  draw();
-  const ro = new ResizeObserver(() => draw());
-  ro.observe(el);
-  (el as HTMLElement & { _ro?: ResizeObserver })._ro?.disconnect();
-  (el as HTMLElement & { _ro?: ResizeObserver })._ro = ro;
+  if (el._raf) cancelAnimationFrame(el._raf);
+  if (changed && !reduceMotion.matches) {
+    const start = performance.now();
+    const frame = (now: number) => {
+      const t = Math.min(1, (now - start) / DURATION);
+      draw(ease(t));
+      el._raf = t < 1 ? requestAnimationFrame(frame) : undefined;
+    };
+    draw(0);
+    el._raf = requestAnimationFrame(frame);
+  } else {
+    draw(1);
+  }
+  // Redraw (without motion) only when the width really changes.
+  el._ro?.disconnect();
+  el._ro = new ResizeObserver(() => {
+    if (Math.max(240, el.clientWidth) !== el._w && !el._raf) draw(1);
+  });
+  el._ro.observe(el);
+}
+
+/** Tweens the text of `[data-num]` elements from their last value to the new one. */
+const lastNumbers = new Map<string, number>();
+export function tweenNumbers(root: ParentNode, fmt: Record<string, (v: number) => string>): void {
+  root.querySelectorAll<HTMLElement>("[data-num]").forEach((el) => {
+    const [key, kind, raw] = el.dataset.num!.split("|");
+    const to = Number(raw);
+    const from = lastNumbers.get(key);
+    lastNumbers.set(key, to);
+    const f = fmt[kind];
+    if (from === undefined || from === to || reduceMotion.matches || !f) return;
+    const start = performance.now();
+    const frame = (now: number) => {
+      const t = Math.min(1, (now - start) / DURATION);
+      el.textContent = f(from + (to - from) * ease(t));
+      if (t < 1 && el.isConnected) requestAnimationFrame(frame);
+    };
+    el.textContent = f(from);
+    requestAnimationFrame(frame);
+  });
+}
+
+/**
+ * List bars (`[data-k]`) slide from their previous length to the new one. Called with the
+ * styles captured before a re-render; new rows grow from zero.
+ */
+export function captureBars(root: ParentNode): Map<string, string> {
+  const m = new Map<string, string>();
+  root.querySelectorAll<HTMLElement>("[data-k]").forEach((e) => m.set(e.dataset.k!, e.style.cssText));
+  return m;
+}
+
+export function slideBars(root: ParentNode, before: Map<string, string>): void {
+  if (reduceMotion.matches) return;
+  const els = [...root.querySelectorAll<HTMLElement>("[data-k]")];
+  const targets = els.map((e) => e.style.cssText);
+  els.forEach((e) => {
+    const old = before.get(e.dataset.k!);
+    e.style.cssText = old ?? e.style.cssText.replace(/--f:\s*[\d.]+/, "--f:0").replace(/width:\s*[\d.]+%/, "width:0%");
+  });
+  void (root as HTMLElement).offsetWidth; // commit the old lengths so the change transitions
+  els.forEach((e, i) => (e.style.cssText = targets[i]));
 }
 
 function tipHtml(c: Column, opt: ChartOptions): string {
@@ -199,7 +287,9 @@ export function durationTick(v: number): string {
 }
 
 /** Horizontal meter used in list rows. */
-export function meter(fraction: number, color: string): string {
+/** Horizontal meter used in list rows; `key` lets it slide between refreshes. */
+export function meter(fraction: number, color: string, key?: string): string {
   const w = Math.max(fraction > 0 ? 1.5 : 0, Math.min(100, fraction * 100));
-  return `<div class="meter"><div style="width:${w}%;background:${color}"></div></div>`;
+  const k = key ? ` data-k="${esc(key)}"` : "";
+  return `<div class="meter"><div${k} style="width:${w}%;background:${color}"></div></div>`;
 }

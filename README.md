@@ -11,7 +11,8 @@ Everything stays on your machine in a local SQLite file.
 
 | | How |
 | --- | --- |
-| **App time** | A small GNOME Shell extension reports the focused app over D-Bus (Wayland does not let normal programs see focus). Time stops counting after 2 minutes without input, on lock and on suspend, except while media is playing. |
+| **App time** | A small GNOME Shell extension reports the focused app over D-Bus (Wayland does not let normal programs see focus). Time stops counting after 2 minutes without input, on lock and on suspend. |
+| **Media** | Apps playing audio or video (VLC, Spotify, a browser video) are tracked through MPRIS and keep counting while playing, even unfocused and without input. Overlapping time is never counted twice in totals. |
 | **Website time** | A browser extension (Chrome, Brave, Edge, Firefox) reports the active tab's domain only. Browser time on a known site counts toward the site's category, so YouTube is Entertainment and GitHub is Developer Tools. |
 | **Pickups** | Every login and every unlock, plus the **first app you used afterwards**. |
 | **Notifications** | Counted per app by watching the session bus (`org.freedesktop.Notifications` and `org.gtk.Notifications`, which covers Flatpak apps too). |
@@ -39,31 +40,44 @@ dashboard.
 
 ## Install
 
-Needs Rust (cargo), Node (npm), and for the app window the WebKitGTK headers:
-
-```sh
-sudo apt install libwebkitgtk-6.0-dev libadwaita-1-dev
-```
+### As a .deb (recommended)
 
 ```sh
 git clone https://github.com/0xshubhs/screentime && cd screentime
-./scripts/install.sh
+sudo apt install libwebkitgtk-6.0-dev libadwaita-1-dev   # build dependencies
+./scripts/install-deb.sh
 ```
 
-This builds everything into `~/.local/bin` and sets it up to **start automatically at every login**:
+This builds `dist/screentime_<version>_<arch>.deb`, installs it with apt and starts it for
+you. `./scripts/install-deb.sh path/to/screentime.deb` installs a package you already have.
+From then on it **starts automatically at every login**, for every user:
 
 - `screentimed` as a systemd user service bound to the graphical session
-- the tray via `~/.config/autostart`
-- the GNOME Shell extension (enabled for your next login)
+- the tray via `/etc/xdg/autostart`
+- the GNOME Shell extension (the daemon enables it for each user)
 
-Then:
+Remove with `sudo apt remove screentime`.
+
+### Per-user, without a package
+
+`./scripts/install.sh` builds and installs into `~/.local` instead (no sudo). Remove with
+`./scripts/uninstall.sh`.
+
+### After installing
 
 1. **Log out and back in once** so GNOME Shell loads the extension. App tracking starts then.
-2. For time per website, load `browser-extension/` as an unpacked extension
-   (`chrome://extensions` or `brave://extensions`, Developer mode, **Load unpacked**).
-   Firefox: `about:debugging`, This Firefox, **Load Temporary Add-on**, pick `manifest.json`.
+2. For time per website, load the browser extension as an unpacked extension
+   (`brave://extensions` or `chrome://extensions`, Developer mode, **Load unpacked**):
+   `/usr/share/screentime/browser-extension` (or `browser-extension/` in the checkout).
 
-Remove with `./scripts/uninstall.sh` (add `--purge` to also delete your history).
+### Your data
+
+History lives in `~/.local/share/screentime/screentime.db`, outside every install location,
+so reinstalls, upgrades and `apt remove`/`purge` never touch it (only
+`./scripts/uninstall.sh --purge` deletes it). Schema changes are numbered migrations, each
+applied in one transaction with its version bump, after a `VACUUM INTO` backup
+(`screentime.db.v<N>-<time>.bak`, newest five kept). The database runs in WAL mode with
+`synchronous=FULL`, and each tracker event commits as one transaction.
 
 ## Docker
 
