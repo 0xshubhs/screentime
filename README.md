@@ -17,10 +17,11 @@ Everything stays on your machine in a local SQLite file.
 | **Notifications** | Counted per app by watching the session bus (`org.freedesktop.Notifications` and `org.gtk.Notifications`, which covers Flatpak apps too). |
 | **Network data** | Totals per physical interface (Wi-Fi, Ethernet) from kernel counters; per-app figures from TCP socket stats, no root needed. UDP/QUIC traffic, very short connections and other users' services show up as *Other*. |
 
-## Dashboard
+## The app
 
-`http://127.0.0.1:47821` (or **Screen Time** in the app grid). Built in TypeScript and embedded in
-the daemon:
+Open **Screen Time** from the app grid, the dock or the top bar icon. It is a native GNOME window
+(GTK4 + libadwaita) that follows the system light/dark style; the dashboard inside is TypeScript,
+served by the daemon (also reachable at `http://127.0.0.1:47821` in a browser):
 
 - Day, Week and Month views with date navigation (arrow keys, `d` / `w` / `m`, or the date picker).
 - Day view shows the week strip on top (selected day in color, average line) and the hourly
@@ -38,7 +39,11 @@ dashboard.
 
 ## Install
 
-Needs Rust (cargo) and Node (npm) to build.
+Needs Rust (cargo), Node (npm), and for the app window the WebKitGTK headers:
+
+```sh
+sudo apt install libwebkitgtk-6.0-dev libadwaita-1-dev
+```
 
 ```sh
 git clone https://github.com/0xshubhs/screentime && cd screentime
@@ -74,7 +79,7 @@ docker compose up -d --build     # http://localhost:47822
 ```sh
 screentime today [YYYY-MM-DD]    # summary in the terminal
 screentime week  [YYYY-MM-DD]
-screentime open                  # open the dashboard
+screentime open [week]           # open the Screen Time app
 screentime categorize youtube.com
 ```
 
@@ -105,6 +110,7 @@ Layout:
 crates/screentime-core   schema, categorisation rules, report engine, app/icon lookup
 crates/screentimed       daemon: D-Bus listeners, tracker state machine, network sampler, HTTP API
 crates/screentime-cli    `screentime` CLI and the top bar tray
+crates/screentime-app    native window (GTK4, libadwaita, WebKitGTK) around the dashboard
 ui/                      TypeScript dashboard (Vite), embedded into screentimed at build time
 gnome-extension/         GNOME Shell extension reporting the focused app
 browser-extension/       WebExtension reporting the active tab's domain

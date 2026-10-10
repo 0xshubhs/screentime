@@ -20,11 +20,19 @@ echo "==> Building dashboard"
 (cd ui && npm ci --no-audit --no-fund --silent && npm run build --silent)
 
 echo "==> Building binaries"
-cargo build --release --locked
+cargo build --release --locked -p screentimed -p screentime-cli
+# The desktop app window needs WebKitGTK's development files to build.
+HAVE_APP=0
+if pkg-config --exists webkitgtk-6.0 libadwaita-1; then
+  cargo build --release --locked -p screentime-app && HAVE_APP=1
+else
+  echo "    (skipping the app window: run 'sudo apt install libwebkitgtk-6.0-dev libadwaita-1-dev' and re-run)"
+fi
 
 echo "==> Installing to $BINDIR"
 install -Dm755 target/release/screentimed "$BINDIR/screentimed"
 install -Dm755 target/release/screentime "$BINDIR/screentime"
+[[ $HAVE_APP == 1 ]] && install -Dm755 target/release/screentime-app "$BINDIR/screentime-app"
 
 for icon in screentime screentime-symbolic screentime-paused-symbolic; do
   install -Dm644 "data/icons/$icon.svg" "$DATA/icons/hicolor/scalable/apps/$icon.svg"
@@ -35,7 +43,11 @@ subst() { sed "s|@BINDIR@|$BINDIR|g" "$1"; }
 mkdir -p "$CONFIG/systemd/user" "$CONFIG/autostart" "$DATA/applications"
 subst packaging/screentimed.service > "$CONFIG/systemd/user/screentimed.service"
 subst packaging/screentime-tray.desktop > "$CONFIG/autostart/screentime-tray.desktop"
-subst packaging/screentime.desktop > "$DATA/applications/screentime.desktop"
+rm -f "$DATA/applications/screentime.desktop"  # pre-app launcher name
+subst packaging/dev.zeroxshubhs.Screentime.desktop |
+  { if [[ $HAVE_APP == 1 ]]; then cat; else sed "s|^Exec=.*|Exec=$BINDIR/screentime open|"; fi; } \
+  > "$DATA/applications/dev.zeroxshubhs.Screentime.desktop"
+update-desktop-database -q "$DATA/applications" 2>/dev/null || true
 
 echo "==> Installing GNOME Shell extension"
 rm -rf "$DATA/gnome-shell/extensions/$UUID"
@@ -64,7 +76,7 @@ setsid -f "$BINDIR/screentime" tray >/dev/null 2>&1 < /dev/null
 
 cat <<MSG
 
-Installed. Dashboard: http://127.0.0.1:47821  (or "Screen Time" in the app grid)
+Installed. Open "Screen Time" from the app grid or the top bar icon.
 
 Next steps:
   1. Log out and back in once so GNOME Shell loads the extension (app tracking starts then).

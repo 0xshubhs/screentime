@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/screentime-core", "crates/screentimed", "crates/screentime-cli"]
+members = ["crates/screentime-core", "crates/screentimed", "crates/screentime-cli", "crates/screentime-app"]
 
 [workspace.package]
 version = "0.1.0"

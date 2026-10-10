@@ -1,0 +1,15 @@
+[package]
+name = "screentime-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "screentime-app"
+path = "src/main.rs"
+
+[dependencies]
+# webkit6 needs gtk::Accessible (v4_10+); CssProvider::load_from_string needs v4_12.
+gtk = { package = "gtk4", version = "0.11.5", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9.2", features = ["v1_4"] }
+webkit6 = "0.6.1"

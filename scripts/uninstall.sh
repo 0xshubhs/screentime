@@ -9,12 +9,13 @@ UUID="screentime@0xshubhs"
 
 systemctl --user disable --now screentimed.service 2>/dev/null || true
 pkill -f "$PREFIX/bin/screentime tray" 2>/dev/null || true
+pkill -x screentime-app 2>/dev/null || true
 gnome-extensions disable "$UUID" 2>/dev/null || true
 
-rm -f "$PREFIX/bin/screentimed" "$PREFIX/bin/screentime" \
+rm -f "$PREFIX/bin/screentimed" "$PREFIX/bin/screentime" "$PREFIX/bin/screentime-app" \
   "$CONFIG/systemd/user/screentimed.service" \
   "$CONFIG/autostart/screentime-tray.desktop" \
-  "$DATA/applications/screentime.desktop" \
+  "$DATA/applications/screentime.desktop" "$DATA/applications/dev.zeroxshubhs.Screentime.desktop" \
   "$DATA/icons/hicolor/scalable/apps/"screentime*.svg
 rm -rf "$DATA/gnome-shell/extensions/$UUID"
 systemctl --user daemon-reload

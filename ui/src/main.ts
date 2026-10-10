@@ -524,5 +524,20 @@ setInterval(() => {
   if (isCurrent() && !document.hidden && !document.querySelector(".sheet-wrap")) load();
 }, 60_000);
 
+// Theme: follow the system unless the desktop app sets it (it passes GNOME's style).
+const embedded = new URLSearchParams(location.search).has("app");
+document.body.classList.toggle("embedded", embedded);
+const media = matchMedia("(prefers-color-scheme: dark)");
+let themeLocked = false;
+function applyTheme(theme: "light" | "dark") {
+  document.documentElement.dataset.theme = theme;
+}
+(window as Window & { setTheme?: (t: "light" | "dark") => void }).setTheme = (t) => {
+  themeLocked = true;
+  applyTheme(t);
+};
+applyTheme(media.matches ? "dark" : "light");
+media.addEventListener("change", (e) => themeLocked || applyTheme(e.matches ? "dark" : "light"));
+
 readHash();
 load();

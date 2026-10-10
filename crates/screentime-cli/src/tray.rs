@@ -59,9 +59,7 @@ struct ScreenTray {
     today: Option<Today>,
 }
 
-fn open(url: String) {
-    let _ = Command::new("xdg-open").arg(url).spawn();
-}
+use crate::open_dashboard as open;
 
 fn info(label: String) -> MenuItem<ScreenTray> {
     StandardItem { label, enabled: false, ..Default::default() }.into()
@@ -92,7 +90,7 @@ impl Tray for ScreenTray {
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
-        open(self.base.clone());
+        open(&self.base, None);
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -129,11 +127,11 @@ impl Tray for ScreenTray {
         items.push(MenuItem::Separator);
         items.push(info("Most used today".into()));
         for a in t.apps.iter().take(5) {
-            let url = format!("{base}/#/day/{}", chrono::Local::now().format("%Y-%m-%d"));
+            let b = base.clone();
             items.push(
                 StandardItem {
                     label: format!("{}   {}", a.name, fmt_duration(a.ms)),
-                    activate: Box::new(move |_: &mut Self| open(url.clone())),
+                    activate: Box::new(move |_: &mut Self| open(&b, Some("day"))),
                     ..Default::default()
                 }
                 .into(),
@@ -155,14 +153,14 @@ impl Tray for ScreenTray {
         items.push(MenuItem::Separator);
         let b = base.clone();
         items.push(
-            StandardItem { label: "Open Screen Time".into(), activate: Box::new(move |_: &mut Self| open(b.clone())), ..Default::default() }
+            StandardItem { label: "Open Screen Time".into(), activate: Box::new(move |_: &mut Self| open(&b, None)), ..Default::default() }
                 .into(),
         );
         let b = base.clone();
         items.push(
             StandardItem {
                 label: "This week".into(),
-                activate: Box::new(move |_: &mut Self| open(format!("{b}/#/week/{}", chrono::Local::now().format("%Y-%m-%d")))),
+                activate: Box::new(move |_: &mut Self| open(&b, Some("week"))),
                 ..Default::default()
             }
             .into(),
@@ -230,7 +228,7 @@ async fn attach(base: &str) -> Result<ksni::Handle<ScreenTray>> {
 pub async fn run(base: String) -> Result<()> {
     let Some(_lock) = claim_singleton() else {
         // Already in the panel: treat the launch as "open the dashboard".
-        open(base);
+        open(&base, None);
         return Ok(());
     };
     let mut handle = attach(&base).await?;

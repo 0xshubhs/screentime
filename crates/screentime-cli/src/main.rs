@@ -11,13 +11,26 @@ const USAGE: &str = "usage: screentime <command>
 
   today [DATE]            summary for a day (default today, DATE is YYYY-MM-DD)
   week [DATE]             summary for the Monday-to-Sunday week containing DATE
-  open                    open the dashboard in the browser
+  open [day|week|month]   open the Screen Time app (or the dashboard in the browser)
   tray                    run the top bar indicator
   categorize <id|domain>  show which category an app id or domain falls in";
 
 fn base_url() -> String {
     let listen = std::env::var("SCREENTIME_LISTEN").unwrap_or_else(|_| "127.0.0.1:47821".into());
     format!("http://{listen}")
+}
+
+/// Opens the native app when installed next to this binary or on PATH, otherwise the
+/// dashboard in the default browser.
+pub fn open_dashboard(base: &str, view: Option<&str>) {
+    let sibling = std::env::current_exe().ok().and_then(|e| Some(e.parent()?.join("screentime-app")));
+    let app = sibling.filter(|p| p.is_file()).map(Into::into).unwrap_or_else(|| std::ffi::OsString::from("screentime-app"));
+    let mut cmd = std::process::Command::new(app);
+    cmd.args(view);
+    if cmd.spawn().is_err() {
+        let hash = view.map(|v| format!("#/{v}/{}", Local::now().format("%Y-%m-%d"))).unwrap_or_default();
+        let _ = std::process::Command::new("xdg-open").arg(format!("{base}/{hash}")).spawn();
+    }
 }
 
 fn date_arg(arg: Option<String>) -> Result<NaiveDate> {
@@ -41,9 +54,7 @@ async fn main() -> Result<()> {
             let from = d - Duration::days(d.weekday().num_days_from_monday() as i64);
             print(&build(from, from + Duration::days(6))?, true);
         }
-        "open" => {
-            std::process::Command::new("xdg-open").arg(base_url()).spawn()?;
-        }
+        "open" => open_dashboard(&base_url(), args.next().as_deref()),
         "tray" => tray::run(base_url()).await?,
         "categorize" => {
             let target = args.next().unwrap_or_default();

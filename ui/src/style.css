@@ -32,37 +32,36 @@
   --radius: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    color-scheme: dark;
-    --bg: #000000;
-    --card: #1c1c1e;
-    --card-2: #2c2c2e;
-    --ink: #f0efec;
-    --ink-2: #c3c2b7;
-    --ink-3: #8d8c86;
-    --hair: rgba(84, 84, 88, 0.45);
-    --grid: #2f2f31;
-    --seg: rgba(118, 118, 128, 0.24);
-    --seg-on: #636366;
-    --shadow: none;
-    --accent: #3987e5;
-    --ref: #199e70;
-    --c1: #3987e5;
-    --c2: #d95926;
-    --c3: #199e70;
-    --c4: #c98500;
-    --c5: #d55181;
-    --c6: #008300;
-    --c7: #9085e9;
-    --c8: #e66767;
-    --c-other: #6b6a64;
-    --bar-muted: #48484a;
-    --net-rx: #3987e5;
-    --net-tx: #d95926;
-    --warn-bg: #3a2a0c;
-    --warn-ink: #ffd48a;
-  }
+/* Set by main.ts from the system preference, or by the desktop app from GNOME's style. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --card: #1c1c1e;
+  --card-2: #2c2c2e;
+  --ink: #f0efec;
+  --ink-2: #c3c2b7;
+  --ink-3: #8d8c86;
+  --hair: rgba(84, 84, 88, 0.45);
+  --grid: #2f2f31;
+  --seg: rgba(118, 118, 128, 0.24);
+  --seg-on: #636366;
+  --shadow: none;
+  --accent: #3987e5;
+  --ref: #199e70;
+  --c1: #3987e5;
+  --c2: #d95926;
+  --c3: #199e70;
+  --c4: #c98500;
+  --c5: #d55181;
+  --c6: #008300;
+  --c7: #9085e9;
+  --c8: #e66767;
+  --c-other: #6b6a64;
+  --bar-muted: #48484a;
+  --net-rx: #3987e5;
+  --net-tx: #d95926;
+  --warn-bg: #3a2a0c;
+  --warn-ink: #ffd48a;
 }
 
 * { box-sizing: border-box; }
@@ -273,3 +272,7 @@ main { max-width: 960px; margin: 0 auto; padding: 20px 16px 64px; display: flex;
 .bar-line .fill { height: 7px; border-radius: 4px; flex: 0 1 calc(var(--f) * 100%); min-width: 4px; }
 .bar-line .value { flex: none; font-size: 13px; color: var(--ink-3); white-space: nowrap; }
 .icon.swatch.stack { background: conic-gradient(var(--c1) 0 30%, var(--c2) 0 50%, var(--c3) 0 70%, var(--c7) 0 90%, var(--c-other) 0); }
+
+/* Inside the desktop app the window title already says Screen Time. */
+.embedded .brand { visibility: hidden; }
+.embedded .top { border-bottom: 0; }
