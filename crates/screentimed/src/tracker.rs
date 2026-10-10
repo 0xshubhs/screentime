@@ -113,7 +113,7 @@ impl Tracker {
     }
 
     pub fn on_focus(&mut self, db: &Db, now: i64, app: Option<String>) -> Result<()> {
-        let app = app.filter(|a| !a.is_empty());
+        let app = app.filter(|a| !screentime_core::is_ignored_app(a));
         if app == self.focus {
             return Ok(());
         }

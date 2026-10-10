@@ -2,6 +2,7 @@
 // where ordinary clients cannot query focus.
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
@@ -40,14 +41,15 @@ export default class ScreentimeExtension extends Extension {
 
     _focused() {
         const win = global.display.focus_window;
-        if (!win)
+        // The desktop (icons on the wallpaper) is not an app someone is using.
+        if (!win || win.get_window_type() === Meta.WindowType.DESKTOP)
             return ['', ''];
         const app = this._tracker.get_window_app(win);
         // Windows with no matching .desktop file get synthetic "window:N" ids; report
         // their WM class instead so they stay stable across restarts.
         const id = app && !app.is_window_backed()
             ? app.get_id()
-            : `wm:${win.get_wm_class() ?? 'unknown'}`;
+            : win.get_wm_class() ? `wm:${win.get_wm_class()}` : '';
         return [id, win.get_title() ?? ''];
     }
 

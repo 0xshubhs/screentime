@@ -11,6 +11,12 @@ use serde::Deserialize;
 /// SQLite schema for the usage store.
 pub const SCHEMA: &str = include_str!("schema.sql");
 
+/// Focus targets that are not apps a person uses: the desktop-icons window (a bare gjs
+/// window) and windows without a class (shell surfaces).
+pub fn is_ignored_app(id: &str) -> bool {
+    matches!(id.to_ascii_lowercase().as_str(), "" | "wm:" | "wm:gjs" | "wm:unknown")
+}
+
 /// Fallback category when no rule matches.
 pub const OTHER: &str = "Other";
 

@@ -56,7 +56,7 @@ function go(view: View, anchor: string) {
 
 window.addEventListener("hashchange", () => {
   readHash();
-  load();
+  load(false);
 });
 
 // Data
@@ -73,7 +73,14 @@ function reportUrl(from: string, to: string, filter?: Filter): string {
   return `/api/report?${q}`;
 }
 
-async function load() {
+/** Last data rendered, so background refreshes only redraw when something changed. */
+let lastData = "";
+
+/**
+ * `quiet` is a background refresh: no bar animation, no redraw when the data is unchanged,
+ * and the scroll position is kept.
+ */
+async function load(quiet = false) {
   const seq = ++loadSeq;
   const { from, to } = dates.range(state.view, state.anchor);
   try {
@@ -84,12 +91,20 @@ async function load() {
       state.view === "day" ? getJson<Report>(reportUrl(week.from, week.to)) : Promise.resolve(null),
     ]);
     if (seq !== loadSeq) return;
+    const data = JSON.stringify([r, s, w, state.view, state.anchor]);
+    if (quiet && data === lastData) return;
+    lastData = data;
     report = r;
     status = s;
     weekReport = w;
+    const scroll = window.scrollY;
+    app.classList.toggle("animate", !quiet);
     render();
+    if (quiet) window.scrollTo(0, scroll);
+    else setTimeout(() => app.classList.remove("animate"), 600);
   } catch (e) {
-    if (seq !== loadSeq) return;
+    // A blip during a background refresh keeps the last good data on screen.
+    if (seq !== loadSeq || (quiet && report)) return;
     app.innerHTML = `<div class="empty-page"><h1>Can't reach screentimed</h1><p>${esc(String(e))}</p>
       <p>Start it with <code>systemctl --user start screentimed</code>.</p></div>`;
   }
@@ -305,6 +320,8 @@ function render() {
     </section>
   </main>`;
 
+  postState();
+
   // Charts
   if (state.view === "day" && weekReport) {
     const w = weekReport;
@@ -478,19 +495,17 @@ app.addEventListener("click", async (e) => {
   if (btn) {
     if (btn.dataset.view) go(btn.dataset.view as View, state.anchor);
     else if (btn.dataset.step) {
-      let next = dates.step(state.view, state.anchor, Number(btn.dataset.step) as 1 | -1);
-      if (next > dates.today()) next = dates.today();
-      go(state.view, next);
+      stepDate(Number(btn.dataset.step) as 1 | -1);
     } else if (btn.dataset.today !== undefined) go(state.view, dates.today());
     else if (btn.dataset.tab) {
       state.tab = btn.dataset.tab as State["tab"];
-      render();
+      rerender();
     } else if (btn.dataset.expand) {
       state.expanded[btn.dataset.expand] = !state.expanded[btn.dataset.expand];
-      render();
+      rerender();
     } else if (btn.dataset.action === "resume") {
       await fetch("/api/pause", { method: "POST", headers: { "content-type": "application/json", "x-screentime": "1" }, body: JSON.stringify({ paused: false }) });
-      load();
+      load(true);
     }
     return;
   }
@@ -507,7 +522,7 @@ app.addEventListener("change", (e) => {
   if (input.type === "date" && input.value) go(state.view, input.value);
   if (input.dataset.show !== undefined) {
     state.tab = input.value as State["tab"];
-    render();
+    rerender();
   }
 });
 
@@ -519,10 +534,50 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "d" || e.key === "w" || e.key === "m") go(({ d: "day", w: "week", m: "month" } as const)[e.key], state.anchor);
 });
 
-// Live refresh while looking at a range that includes today.
-setInterval(() => {
-  if (isCurrent() && !document.hidden && !document.querySelector(".sheet-wrap")) load();
-}, 60_000);
+/** Redraw for a UI-only change (tab, expand) without replaying the intro animation. */
+function rerender() {
+  app.classList.remove("animate");
+  render();
+}
+
+function stepDate(dir: 1 | -1) {
+  let next = dates.step(state.view, state.anchor, dir);
+  if (next > dates.today()) next = dates.today();
+  go(state.view, next);
+}
+
+// Live refresh while looking at a range that includes today, and right away when the
+// window comes back into view. Quiet refreshes skip redraws when nothing changed.
+const refresh = () => {
+  if (isCurrent() && !document.hidden && !document.querySelector(".sheet-wrap")) load(true);
+};
+setInterval(refresh, 15_000);
+document.addEventListener("visibilitychange", refresh);
+window.addEventListener("focus", refresh);
+
+// Bridge to the desktop app: its header bar holds the view switcher and date controls.
+type Host = { postMessage(msg: string): void };
+const host = (window as Window & { webkit?: { messageHandlers?: { screentime?: Host } } }).webkit?.messageHandlers?.screentime;
+
+function postState() {
+  if (!host) return;
+  const { to } = dates.range(state.view, state.anchor);
+  host.postMessage(
+    JSON.stringify({
+      view: state.view,
+      anchor: state.anchor,
+      title: dates.title(state.view, state.anchor),
+      can_next: to < dates.today(),
+      is_current: isCurrent(),
+    }),
+  );
+}
+
+(window as Window & { screentime?: unknown }).screentime = {
+  go: (view: View, anchor?: string) => go(view, anchor ?? state.anchor),
+  step: stepDate,
+  today: () => go(state.view, dates.today()),
+};
 
 // Theme: follow the system unless the desktop app sets it (it passes GNOME's style).
 const embedded = new URLSearchParams(location.search).has("app");
@@ -540,4 +595,4 @@ applyTheme(media.matches ? "dark" : "light");
 media.addEventListener("change", (e) => themeLocked || applyTheme(e.matches ? "dark" : "light"));
 
 readHash();
-load();
+load(false);

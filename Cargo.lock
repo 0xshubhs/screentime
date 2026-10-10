@@ -1461,6 +1461,8 @@ version = "0.1.0"
 dependencies = [
  "gtk4",
  "libadwaita",
+ "serde",
+ "serde_json",
  "webkit6",
 ]
 

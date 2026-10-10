@@ -255,7 +255,7 @@ pub fn build(
         Filter::Category(c) => Some(c.as_str()),
         _ => None,
     };
-    for r in &rows {
+    for r in rows.iter().filter(|r| !crate::is_ignored_app(&r.app_id)) {
         let (s, e) = (r.start_ms.max(start), r.end_ms.min(end));
         if r.web {
             let domain = r.domain.as_deref().unwrap_or_default();
