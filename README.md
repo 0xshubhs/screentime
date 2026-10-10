@@ -13,6 +13,7 @@ Everything stays on your machine in a local SQLite file.
 | --- | --- |
 | **App time** | A small GNOME Shell extension reports the focused app over D-Bus (Wayland does not let normal programs see focus). Time stops counting after 2 minutes without input, on lock and on suspend. |
 | **Media** | Apps playing audio or video (VLC, Spotify, a browser video) are tracked through MPRIS and keep counting while playing, even unfocused and without input. Overlapping time is never counted twice in totals. |
+| **Multiple displays** | The top window on each display other than the one you are working on also counts while you are active, so a video or docs on a second monitor are not lost. Overlapping time is never counted twice in totals. |
 | **Website time** | A browser extension (Chrome, Brave, Edge, Firefox) reports the active tab's domain only. Browser time on a known site counts toward the site's category, so YouTube is Entertainment and GitHub is Developer Tools. |
 | **Pickups** | Every login and every unlock, plus the **first app you used afterwards**. |
 | **Notifications** | Counted per app by watching the session bus (`org.freedesktop.Notifications` and `org.gtk.Notifications`, which covers Flatpak apps too). |

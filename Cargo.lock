@@ -1457,7 +1457,7 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 
 [[package]]
 name = "screentime-app"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "gtk4",
  "libadwaita",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "screentime-cli"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1482,7 +1482,7 @@ dependencies = [
 
 [[package]]
 name = "screentime-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -1493,7 +1493,7 @@ dependencies = [
 
 [[package]]
 name = "screentimed"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",

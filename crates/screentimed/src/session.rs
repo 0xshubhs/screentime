@@ -48,6 +48,32 @@ pub async fn focus(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
     }
 }
 
+/// Top windows on displays other than the focused one, from the extension. Polled: windows
+/// move and restack without a single signal to follow.
+pub async fn on_screen(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
+    let shell = proxy(&conn, "org.gnome.Shell", "/dev/zeroxshubhs/Screentime", "dev.zeroxshubhs.Screentime.Shell").await?;
+    let mut tick = tokio::time::interval(Duration::from_secs(5));
+    let mut warned = false;
+    loop {
+        tick.tick().await;
+        let apps = match shell.call::<_, _, Vec<String>>("GetOnScreen", &()).await {
+            Ok(apps) => {
+                warned = false;
+                apps
+            }
+            Err(e) => {
+                // An older extension (until the next login loads the new one) lacks the method.
+                if !warned {
+                    eprintln!("on_screen: {e}");
+                    warned = true;
+                }
+                Vec::new()
+            }
+        };
+        shared.with(|db, t, _| t.on_screen(db, now_ms(), apps.into_iter().collect()));
+    }
+}
+
 pub async fn idle(shared: Arc<Shared>, conn: Connection) -> zbus::Result<()> {
     let mon = proxy(&conn, "org.gnome.Mutter.IdleMonitor", "/org/gnome/Mutter/IdleMonitor/Core", "org.gnome.Mutter.IdleMonitor").await?;
     let mut tick = tokio::time::interval(Duration::from_secs(5));

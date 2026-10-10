@@ -256,7 +256,7 @@ pub fn build(
         _ => None,
     };
     let rows: Vec<&UsageRow> = rows.iter().filter(|r| !crate::is_ignored_app(&r.app_id)).collect();
-    for r in rows.iter().filter(|r| r.kind != Kind::Media) {
+    for r in rows.iter().filter(|r| r.kind != Kind::Background) {
         let (s, e) = (r.start_ms.max(start), r.end_ms.min(end));
         if r.kind == Kind::Web {
             let domain = r.domain.as_deref().unwrap_or_default();
@@ -303,16 +303,16 @@ pub fn build(
         }
     }
 
-    // Media playing in a window that is not focused (a video in VLC while browsing) is still
-    // use. It counts toward its app, and toward totals only where no other app was in use,
-    // so the same minute is never counted twice.
+    // Background use: media playing in a window that is not focused (a video in VLC while
+    // browsing), or the top window on another display. It counts toward its app, and toward
+    // totals only where no other app was in use, so the same minute is never counted twice.
     let focused: Vec<(i64, i64, &str)> = rows
         .iter()
         .filter(|r| r.kind == Kind::App)
         .map(|r| (r.start_ms.max(start), r.end_ms.min(end), r.app_id.as_str()))
         .collect();
     let mut counted_until = i64::MIN;
-    for m in rows.iter().filter(|r| r.kind == Kind::Media) {
+    for m in rows.iter().filter(|r| r.kind == Kind::Background) {
         let keep = match filter {
             Filter::None | Filter::Category(_) => true,
             Filter::App(a) => *a == m.app_id,
@@ -541,7 +541,7 @@ fn uncovered_by<'a>(focused: &[(i64, i64, &'a str)], s: i64, e: i64) -> Vec<(i64
     out
 }
 
-/// Screen time in [from, to): the union of focused use and media playback.
+/// Screen time in [from, to): the union of focused and background use.
 fn screen_total(db: &Db, from: i64, to: i64) -> Result<i64> {
     let mut iv: Vec<(i64, i64)> = db
         .usage_between(from, to)?
@@ -633,14 +633,14 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let d = NaiveDate::from_ymd_opt(2026, 10, 10).unwrap();
         // VLC plays 10:00-10:36. Focus: VLC 10:00-10:05, Brave 10:05-10:30, VLC 10:30-10:36.
-        let m = db.open_media(at(d, 10, 0), "vlc.desktop").unwrap();
+        let m = db.open_background(at(d, 10, 0), "vlc.desktop").unwrap();
         db.extend_usage(m, at(d, 10, 36)).unwrap();
         for (a, b, app) in [(0, 5, "vlc.desktop"), (5, 30, "brave-browser.desktop"), (30, 36, "vlc.desktop")] {
             let id = db.open_usage(at(d, 10, a), app, None).unwrap();
             db.extend_usage(id, at(d, 10, b)).unwrap();
         }
         // And 5 more minutes of VLC playing after the user walked away.
-        let m = db.open_media(at(d, 11, 0), "vlc.desktop").unwrap();
+        let m = db.open_background(at(d, 11, 0), "vlc.desktop").unwrap();
         db.extend_usage(m, at(d, 11, 5)).unwrap();
 
         let r = build(&db, &Rules::builtin(), &AppIndex::default(), d, d, &Filter::None, at(d, 23, 0)).unwrap();

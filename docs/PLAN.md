@@ -87,6 +87,9 @@ Rules:
   domain, so the UI can show "Apps" and "Websites" tabs like Screen Time without double
   counting the total (totals are computed from `app` rows only).
 - Media exception: if the focused tab is audible (video), idle does not stop the clock.
+- Background use (`kind = 'background'`): an app playing media (MPRIS), or the top window on
+  another display while the user is active, counts toward that app even unfocused. Totals use
+  the union of intervals, so a minute is counted once.
 - Category is computed from the rules when reports are built, so editing rules re-categorises
   history immediately.
 

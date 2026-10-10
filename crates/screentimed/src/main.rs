@@ -135,6 +135,7 @@ async fn main() -> anyhow::Result<()> {
                 spawn("focus", session::focus(shared.clone(), session.clone()));
                 spawn("idle", session::idle(shared.clone(), session.clone()));
                 spawn("media", session::media(shared.clone(), session.clone()));
+                spawn("on_screen", session::on_screen(shared.clone(), session.clone()));
                 spawn("screensaver", session::screensaver(shared.clone(), session));
                 spawn("notifications", notify::monitor(shared.clone()));
             }

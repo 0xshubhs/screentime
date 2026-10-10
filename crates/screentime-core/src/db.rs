@@ -21,6 +21,7 @@ pub const SLOT_MS: i64 = 15 * 60 * 1000;
 const MIGRATIONS: &[&str] = &[
     include_str!("migrations/0001_initial.sql"),
     include_str!("migrations/0002_media_usage.sql"),
+    include_str!("migrations/0003_background_usage.sql"),
 ];
 
 /// Pre-migration backups kept next to the database.
@@ -48,8 +49,8 @@ pub enum Kind {
     App,
     /// The site in the focused browser tab.
     Web,
-    /// An app playing media, whether or not it is focused.
-    Media,
+    /// An app in use without focus: playing media, or the top window on another display.
+    Background,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,9 +104,9 @@ impl Db {
         Ok(v)
     }
 
-    pub fn open_media(&self, now: i64, app_id: &str) -> Result<i64> {
+    pub fn open_background(&self, now: i64, app_id: &str) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (?1, ?1, 'media', ?2)",
+            "INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (?1, ?1, 'background', ?2)",
             params![now, app_id],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -186,7 +187,7 @@ impl Db {
                 end_ms: r.get(1)?,
                 kind: match r.get::<_, String>(2)?.as_str() {
                     "web" => Kind::Web,
-                    "media" => Kind::Media,
+                    "background" => Kind::Background,
                     _ => Kind::App,
                 },
                 app_id: r.get(3)?,
@@ -333,7 +334,7 @@ mod tests {
         assert_eq!(rows[1].domain.as_deref(), Some("github.com"));
         assert_eq!(db.pickups_between(0, 10).unwrap().len(), 1);
         // The new kind is accepted now.
-        db.open_media(6, "vlc.desktop").unwrap();
+        db.open_background(6, "vlc.desktop").unwrap();
         // A backup of the old file was taken first.
         let backups = std::fs::read_dir(path.parent().unwrap())
             .unwrap()
@@ -345,6 +346,23 @@ mod tests {
         drop(db);
         let db = Db::open(&path).unwrap();
         assert_eq!(db.usage_between(0, 10).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn media_rows_become_background_rows() {
+        let path = scratch("background");
+        {
+            // A database as 0.2.0 left it: migrations 1 and 2, with a media row.
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.execute_batch(MIGRATIONS[1]).unwrap();
+            conn.pragma_update(None, "user_version", 2).unwrap();
+            conn.execute("INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (1, 9, 'media', 'vlc.desktop')", []).unwrap();
+            conn.execute("INSERT INTO usage (start_ms, end_ms, kind, app_id) VALUES (2, 3, 'app', 'code.desktop')", []).unwrap();
+        }
+        let db = Db::open(&path).unwrap();
+        let kinds: Vec<Kind> = db.usage_between(0, 10).unwrap().into_iter().map(|r| r.kind).collect();
+        assert_eq!(kinds, vec![Kind::Background, Kind::App]);
     }
 
     #[test]

@@ -57,8 +57,10 @@ pub struct Tracker {
     pub paused: bool,
     /// Apps currently playing media (MPRIS PlaybackStatus = Playing).
     pub playing: HashSet<String>,
-    /// Open `media` rows by app.
-    open_media: HashMap<String, i64>,
+    /// Apps whose window is on top on a display other than the focused one.
+    pub on_screen: HashSet<String>,
+    /// Open `background` rows by app.
+    open_background: HashMap<String, i64>,
     web: HashMap<String, WebState>,
     open_app: Option<Open>,
     open_web: Option<Open>,
@@ -90,22 +92,34 @@ impl Tracker {
         self.current_web().is_some_and(|w| w.audible) || self.focus.as_ref().is_some_and(|f| self.playing.contains(f))
     }
 
-    /// Playback counts while the screen is on (not locked, asleep or paused), focused or not.
-    fn sync_media(&mut self, db: &Db, now: i64) -> Result<()> {
+    /// Apps in use without focus. Playback counts while the screen is on (not locked, asleep
+    /// or paused); a window on another display counts only while the user is also active.
+    fn background_apps(&self) -> HashSet<String> {
         let screen_on = !self.locked && !self.sleeping && !self.paused;
-        let stopped: Vec<String> =
-            self.open_media.keys().filter(|a| !screen_on || !self.playing.contains(*a)).cloned().collect();
-        for app in stopped {
-            if let Some(row) = self.open_media.remove(&app) {
-                db.extend_usage(row, now)?;
+        let mut apps = HashSet::new();
+        if screen_on {
+            apps.extend(self.playing.iter().cloned());
+            if !self.idle {
+                apps.extend(self.on_screen.iter().cloned());
             }
         }
-        if screen_on {
-            for app in &self.playing {
-                if !self.open_media.contains_key(app) {
-                    let row = db.open_media(now, app)?;
-                    self.open_media.insert(app.clone(), row);
-                }
+        apps
+    }
+
+    /// Keeps one open `background` row per app in `background_apps`. Rows that stop are
+    /// closed at `end`.
+    fn sync_background(&mut self, db: &Db, now: i64, end: i64) -> Result<()> {
+        let want = self.background_apps();
+        let stopped: Vec<String> = self.open_background.keys().filter(|a| !want.contains(*a)).cloned().collect();
+        for app in stopped {
+            if let Some(row) = self.open_background.remove(&app) {
+                db.extend_usage(row, end)?;
+            }
+        }
+        for app in want {
+            if let std::collections::hash_map::Entry::Vacant(slot) = self.open_background.entry(app) {
+                let row = db.open_background(now, slot.key())?;
+                slot.insert(row);
             }
         }
         Ok(())
@@ -116,7 +130,17 @@ impl Tracker {
             return Ok(());
         }
         self.playing = playing;
-        self.sync_media(db, now)
+        self.sync_background(db, now, now)
+    }
+
+    /// `apps` are the top windows on displays other than the focused one.
+    pub fn on_screen(&mut self, db: &Db, now: i64, apps: HashSet<String>) -> Result<()> {
+        let apps: HashSet<String> = apps.into_iter().filter(|a| !screentime_core::is_ignored_app(a)).collect();
+        if apps == self.on_screen {
+            return Ok(());
+        }
+        self.on_screen = apps;
+        self.sync_background(db, now, now)
     }
 
     /// Opens/closes rows so the database matches the current state. `end` is the time
@@ -181,7 +205,8 @@ impl Tracker {
         self.idle = idle;
         // Going idle: the user actually left when input stopped, so back-date the end.
         let end = if idle { now - idle_ms } else { now };
-        self.sync(db, now, end)
+        self.sync(db, now, end)?;
+        self.sync_background(db, now, end)
     }
 
     pub fn on_lock(&mut self, db: &Db, now: i64, locked: bool) -> Result<()> {
@@ -197,13 +222,13 @@ impl Tracker {
             self.idle = false;
         }
         self.sync(db, now, now)?;
-        self.sync_media(db, now)
+        self.sync_background(db, now, now)
     }
 
     pub fn on_pause(&mut self, db: &Db, now: i64, paused: bool) -> Result<()> {
         self.paused = paused;
         self.sync(db, now, now)?;
-        self.sync_media(db, now)
+        self.sync_background(db, now, now)
     }
 
     pub fn on_sleep(&mut self, db: &Db, now: i64, sleeping: bool) -> Result<()> {
@@ -212,7 +237,7 @@ impl Tracker {
             self.idle = false;
         }
         self.sync(db, now, now)?;
-        self.sync_media(db, now)
+        self.sync_background(db, now, now)
     }
 
     /// Records the session login as a pickup (idempotent across daemon restarts).
@@ -229,7 +254,7 @@ impl Tracker {
         for o in [&self.open_app, &self.open_web].into_iter().flatten() {
             db.extend_usage(o.row, now)?;
         }
-        for row in self.open_media.values() {
+        for row in self.open_background.values() {
             db.extend_usage(*row, now)?;
         }
         Ok(())
@@ -239,7 +264,7 @@ impl Tracker {
         self.heartbeat(db, now)?;
         self.open_app = None;
         self.open_web = None;
-        self.open_media.clear();
+        self.open_background.clear();
         Ok(())
     }
 }
@@ -254,7 +279,7 @@ mod tests {
         db.usage_between(0, i64::MAX)
             .unwrap()
             .into_iter()
-            .filter(|r| r.kind != Kind::Media)
+            .filter(|r| r.kind != Kind::Background)
             .map(|r| (r.start_ms, r.end_ms, r.kind == Kind::Web, r.app_id, r.domain))
             .collect()
     }
@@ -323,14 +348,35 @@ mod tests {
         // Switch to the browser; VLC keeps playing in the background.
         t.on_focus(&db, 10 * M, Some("brave-browser.desktop".into())).unwrap();
         t.on_lock(&db, 36 * M, true).unwrap();
-        let media: Vec<_> = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Media).collect();
+        let media: Vec<_> = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Background).collect();
         assert_eq!(media.len(), 1);
         assert_eq!((media[0].start_ms, media[0].end_ms), (0, 36 * M));
         // Unlocking while still playing resumes it.
         t.on_lock(&db, 40 * M, false).unwrap();
         t.shutdown(&db, 41 * M).unwrap();
-        let media = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Media).count();
+        let media = db.usage_between(0, i64::MAX).unwrap().into_iter().filter(|r| r.kind == Kind::Background).count();
         assert_eq!(media, 2);
+    }
+
+    #[test]
+    fn other_display_counts_while_active() {
+        let db = Db::open_in_memory().unwrap();
+        let rules = Rules::builtin();
+        let mut t = Tracker::default();
+        t.on_focus(&db, 0, Some("code.desktop".into())).unwrap();
+        t.on_screen(&db, 0, HashSet::from(["brave-browser.desktop".to_string()])).unwrap();
+        // Input stopped at 10m, noticed at 13m: the other display stops counting at 10m too.
+        t.on_idle_time(&db, &rules, 13 * M, 3 * M).unwrap();
+        t.on_idle_time(&db, &rules, 20 * M, 0).unwrap();
+        t.shutdown(&db, 30 * M).unwrap();
+        let bg: Vec<_> = db
+            .usage_between(0, i64::MAX)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.kind == Kind::Background)
+            .map(|r| (r.start_ms, r.end_ms))
+            .collect();
+        assert_eq!(bg, vec![(0, 10 * M), (20 * M, 30 * M)]);
     }
 
     #[test]
