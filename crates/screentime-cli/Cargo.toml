@@ -1,0 +1,12 @@
+[package]
+name = "screentime-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "screentime"
+path = "src/main.rs"
+
+[dependencies]
+screentime-core = { path = "../screentime-core" }
